@@ -259,6 +259,9 @@ public class RpcContext {
      * @return the get client ip
      */
     public String getClientIp() {
+        if (channel == null) {
+            return null;
+        }
         String address = getAddressFromChannel(channel);
         String clientIp = address;
         if (clientIp.contains(Constants.IP_PORT_SPLIT_CHAR)) {

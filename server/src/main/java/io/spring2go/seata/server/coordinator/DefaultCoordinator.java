@@ -80,8 +80,10 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
 
             long branchId = BRANCH_ID_GENERATOR.incrementAndGet();
             String clientId = (rpcContext != null) ? rpcContext.getApplicationId() : null;
+            String clientIp = (rpcContext != null && rpcContext.getChannel() != null) ? rpcContext.getClientIp() : null;
             BranchSession branchSession = new BranchSession(txId, branchId, request.getResourceId(),
                     request.getBranchType(), request.getLockKey(), clientId);
+            branchSession.setClientIp(clientIp);
 
             // 申请全局行锁
             boolean lockAcquired = lockManager.acquireLock(branchSession);
@@ -155,7 +157,8 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
                         branchCommitRequest.setBranchType(branch.getBranchType());
 
                         String clientAppName = branch.getClientId();
-                        serverMessageSender.sendSynRequest(branch.getResourceId(), null, clientAppName, branchCommitRequest, 3000);
+                        String clientIp = branch.getClientIp();
+                        serverMessageSender.sendSynRequest(branch.getResourceId(), clientIp, clientAppName, branchCommitRequest, 3000);
                     } catch (Exception e) {
                         LOGGER.error("Failed to dispatch BranchCommit to branch [" + branch.getBranchId() + "]", e);
                     }
@@ -207,7 +210,8 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
                         branchRollbackRequest.setBranchType(branch.getBranchType());
 
                         String clientAppName = branch.getClientId();
-                        serverMessageSender.sendSynRequest(branch.getResourceId(), null, clientAppName, branchRollbackRequest, 3000);
+                        String clientIp = branch.getClientIp();
+                        serverMessageSender.sendSynRequest(branch.getResourceId(), clientIp, clientAppName, branchRollbackRequest, 3000);
                     } catch (Exception e) {
                         LOGGER.error("Failed to dispatch BranchRollback to branch [" + branch.getBranchId() + "]", e);
                     }

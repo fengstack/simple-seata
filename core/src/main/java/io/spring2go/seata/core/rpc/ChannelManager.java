@@ -303,21 +303,23 @@ public class ChannelManager {
         if (null != applicationIdMap && !applicationIdMap.isEmpty()) {
             ConcurrentMap<String, ConcurrentMap<Integer, RpcContext>> clientIpMap = applicationIdMap.get(clientAppName);
             if (null != clientIpMap && !clientIpMap.isEmpty()) {
-                ConcurrentMap<Integer, RpcContext> portMap = clientIpMap.get(clientIp);
-                if (null != portMap && !portMap.isEmpty()) {
-                    for (ConcurrentMap.Entry<Integer, RpcContext> portMapEntry : portMap.entrySet()) {
-                        Channel channel = portMapEntry.getValue().getChannel();
-                        if (channel.isActive()) {
-                            resultChannel = channel;
-                            break;
+                if (clientIp != null) {
+                    ConcurrentMap<Integer, RpcContext> portMap = clientIpMap.get(clientIp);
+                    if (null != portMap && !portMap.isEmpty()) {
+                        for (ConcurrentMap.Entry<Integer, RpcContext> portMapEntry : portMap.entrySet()) {
+                            Channel channel = portMapEntry.getValue().getChannel();
+                            if (channel.isActive()) {
+                                resultChannel = channel;
+                                break;
+                            }
+                            portMap.remove(portMapEntry.getKey());
                         }
-                        portMap.remove(portMapEntry.getKey());
                     }
                 }
                 if (null == resultChannel) {
                     for (ConcurrentMap.Entry<String, ConcurrentMap<Integer, RpcContext>> clientIpMapEntry : clientIpMap
                             .entrySet()) {
-                        if (clientIpMapEntry.getKey().equals(clientIp)) { continue; }
+                        if (clientIp != null && clientIpMapEntry.getKey().equals(clientIp)) { continue; }
                         for (ConcurrentMap.Entry<Integer, RpcContext> portMapEntry : clientIpMapEntry.getValue()
                                 .entrySet()) {
                             Channel channel = portMapEntry.getValue().getChannel();
@@ -344,7 +346,7 @@ public class ChannelManager {
                     RpcContext>>> appIdEntryMap : RM_CHANNELS.values()) {
                 for (ConcurrentMap<String, ConcurrentMap<Integer,
                         RpcContext>> clientIpEntryMap : appIdEntryMap.values()) {
-                    if (clientIpEntryMap.containsKey(clientIp)) {
+                    if (clientIp != null && clientIpEntryMap.containsKey(clientIp)) {
                         for (ConcurrentMap.Entry<Integer, RpcContext> portMapEntry : clientIpEntryMap.get(clientIp)
                                 .entrySet()) {
                             Channel channel = portMapEntry.getValue().getChannel();
@@ -356,6 +358,19 @@ public class ChannelManager {
                                 break;
                             }
                             clientIpEntryMap.get(clientIp).remove(portMapEntry.getKey());
+                        }
+                    } else if (clientIp == null) {
+                        for (ConcurrentMap<Integer, RpcContext> portMap : clientIpEntryMap.values()) {
+                            for (ConcurrentMap.Entry<Integer, RpcContext> portMapEntry : portMap.entrySet()) {
+                                Channel channel = portMapEntry.getValue().getChannel();
+                                if (channel.isActive()) {
+                                    resultChannel = channel;
+                                    break;
+                                }
+                            }
+                            if (resultChannel != null) {
+                                break;
+                            }
                         }
                     }
                     if (null != resultChannel) {

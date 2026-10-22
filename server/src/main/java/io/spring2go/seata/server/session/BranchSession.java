@@ -13,6 +13,7 @@ public class BranchSession {
     private BranchType branchType = BranchType.AT;
     private BranchStatus status = BranchStatus.Unknown;
     private String clientId;
+    private String clientIp;
     private String applicationData;
     private String lockKey;
 
@@ -75,6 +76,14 @@ public class BranchSession {
 
     public void setClientId(String clientId) {
         this.clientId = clientId;
+    }
+
+    public String getClientIp() {
+        return clientIp;
+    }
+
+    public void setClientIp(String clientIp) {
+        this.clientIp = clientIp;
     }
 
     public String getApplicationData() {

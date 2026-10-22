@@ -86,4 +86,20 @@ public class DataSourceProvider {
             throw new RuntimeException("Failed to reset test data", e);
         }
     }
+
+    public static int getUndoLogCount() {
+        if (rawDataSource == null) {
+            getDataSourceProxy();
+        }
+        try (Connection conn = rawDataSource.getConnection();
+             Statement stmt = conn.createStatement();
+             java.sql.ResultSet rs = stmt.executeQuery("SELECT count(*) FROM undo_log")) {
+            if (rs.next()) {
+                return rs.getInt(1);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to count undo_log", e);
+        }
+        return 0;
+    }
 }
