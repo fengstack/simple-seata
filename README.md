@@ -35,6 +35,27 @@
 
 ---
 
+## 🚀 快速上手（推荐的学习路径）
+
+**第一步：跑起来"看见" AT 模式** —— 可观察演示，每一步都打印两个独立数据库的数据和 undo_log 的原始前后镜像 JSON：
+
+```bash
+mvn -pl seata-examples -am install -DskipTests
+mvn -pl seata-examples dependency:build-classpath -Dmdep.outputFile=/tmp/cp.txt -DincludeScope=runtime
+java -cp "seata-examples/target/classes:$(cat /tmp/cp.txt)" io.spring2go.seata.examples.DemoApp
+```
+
+三个演示场景：下单成功（两阶段提交 = 异步删 undo_log）、下单失败（反向补偿还原数据）、脏写检测（拒绝盲目补偿 + 自动重试恢复）。
+
+**第二步：跟着源码走一遍全链路** —— 阅读 [docs/learning/at-mode-guide.md](docs/learning/at-mode-guide.md)，
+它按"一阶段 → 二阶段提交 → 二阶段回滚 → 防脏写 → TC 兜底"的顺序，
+把每个环节对应到本仓库的真实类和断点位置，并附 FAQ 解答初学者最常见的困惑。
+
+**第三步：读可执行的文档** —— [EndToEndIntegrationTest](seata-examples/src/test/java/io/spring2go/seata/examples/EndToEndIntegrationTest.java)
+覆盖提交 / 回滚 / 全局锁冲突 / 脏写检测四个场景，每个断言都有中文注释。
+
+---
+
 ## 🏗️ 架构分层与模块详解
 
 项目采用清晰的多模块 Maven 结构：

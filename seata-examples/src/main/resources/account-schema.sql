@@ -1,10 +1,4 @@
-CREATE TABLE IF NOT EXISTS storage_tbl (
-    id INT NOT NULL AUTO_INCREMENT,
-    commodity_code VARCHAR(32) NOT NULL,
-    count INT NOT NULL DEFAULT 0,
-    PRIMARY KEY (id)
-);
-
+-- 账户库（模拟独立的账户微服务的数据库）
 CREATE TABLE IF NOT EXISTS account_tbl (
     id INT NOT NULL AUTO_INCREMENT,
     user_id VARCHAR(32) NOT NULL,
@@ -12,6 +6,7 @@ CREATE TABLE IF NOT EXISTS account_tbl (
     PRIMARY KEY (id)
 );
 
+-- AT 模式回滚日志表：每个参与全局事务的库都要有这张表
 CREATE TABLE IF NOT EXISTS undo_log (
     id BIGINT NOT NULL AUTO_INCREMENT,
     branch_id BIGINT NOT NULL,
