@@ -239,11 +239,29 @@ try {
 }
 ```
 
+### 4. 零配置一键运行端到端演示 (seata-examples)
+
+项目提供了开箱即用的 H2 内存数据库端到端演练案例，无需安装 MySQL 或任何外部中间件：
+
+```bash
+# 运行全链路端到端自动化测试（覆盖 2PC 提交、反向补偿回滚与行锁冲突）
+mvn test -pl examples -Dtest=EndToEndIntegrationTest
+
+# 或运行可交互的端到端演练主程序
+mvn exec:java -pl examples -Dexec.mainClass="io.spring2go.seata.examples.DemoApp"
+```
+
+该演示包含以下完整闭环：
+- **内嵌 TC 引擎**：自动启动 `EmbeddedTC` 监听 8091 端口。
+- **场景一（二阶段提交）**：TM 开启事务 $\to$ 扣库存与扣余额 $\to$ 一阶段持久化 `undo_log` 与申请全局锁 $\to$ 全局提交 $\to$ TC 调度 RM 异步清理 `undo_log`。
+- **场景二（二阶段回滚与补偿）**：模拟业务异常 $\to$ TM 触发回滚 $\to$ TC 调度 RM 读取 `undo_log` 反向生成补偿 SQL 自动还原数据。
+- **场景三（全局行锁并发互斥）**：并发修改同一行数据被全局锁拦截阻断。
+
 ---
 
 ## 💻 技术栈与环境依赖
 
-- **语言环境**：Java 7+（完全兼容 Java 8 / 11 / 17）
+- **语言环境**：Java 8+（支持 Java 8 / 11 / 17 / 21）
 - **构建工具**：Apache Maven 3.x
 - **核心依赖**：
   - **网络通信**：Netty `4.1.24.Final`
