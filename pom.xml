@@ -5,24 +5,20 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>io.spring2go.seata</groupId>
-    <artifactId>seata-all</artifactId>
+    <artifactId>seata-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <modules>
-        <module>config</module>
-        <module>common</module>
-        <module>core</module>
-        <module>rm-datasource</module>
-        <module>server</module>
-        <module>tm</module>
-        <module>examples</module>
-        <!--module>distribution</module>
-        <module>spring</module>
-        <module>dubbo</module>
-        <module>test</module-->
+        <module>seata-common</module>
+        <module>seata-config</module>
+        <module>seata-core</module>
+        <module>seata-rm-datasource</module>
+        <module>seata-server</module>
+        <module>seata-tm</module>
+        <module>seata-examples</module>
     </modules>
     <packaging>pom</packaging>
 
-    <name>spring2go seata ${project.version}</name>
+    <name>seata-parent ${project.version}</name>
     <url>http://spring2go.io</url>
     <prerequisites>
         <maven>3.2.5</maven>
@@ -82,31 +78,6 @@
             <artifactId>seata-tm</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!--dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>seata-client</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>seata-spring</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>seata-dubbo</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>seata-examples</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <!-dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>seata-test</artifactId>
-            <version>${project.version}</version>
-        </dependency-->
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
@@ -128,6 +99,16 @@
             <groupId>com.alibaba</groupId>
             <artifactId>fastjson</artifactId>
             <version>1.2.48</version>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>druid</artifactId>
+            <version>1.1.12</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>18.0</version>
         </dependency>
         <dependency>
             <groupId>org.springframework</groupId>

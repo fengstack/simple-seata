@@ -30,10 +30,10 @@ dependency-reduced-pom.xml
 /distribution/conf
 /distribution/lib
 /distribution/logs
-/server/*root.*
-/server/.root.*
-/server/sessionStore/
-/server/db_store/
+/seata-server/*root.*
+/seata-server/.root.*
+/seata-server/sessionStore/
+/seata-server/db_store/
 /sessionStore/
 /test/sessionStore/
 /distribution/sessionStore/

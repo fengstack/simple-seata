@@ -41,10 +41,13 @@
 
 ```
 simple-seata
-├── common            # 核心公共组件：SPI 加载器、XID 全局事务 ID 生成解析、线程工厂、异常体系
-├── config            # 配置中心模块：基于 Typesafe Config 的轻量化配置与变更监听体系
-├── core              # 事务通信与模型：全局事务状态、Netty 自定义 RPC 通信、0xdada 二进制协议编解码
-└── rm-datasource     # AT 模式核心驱动：数据源代理、Druid SQL 解析、前后镜像构建、UndoLog 管理与补偿
+├── seata-common        # 核心公共组件：SPI 加载器、XID 全局事务 ID 生成解析、线程工厂、异常体系
+├── seata-config        # 配置中心模块：基于 Typesafe Config 的轻量化配置与变更监听体系
+├── seata-core          # 事务通信与模型：全局事务状态、Netty 自定义 RPC 通信、0xdada 二进制协议编解码
+├── seata-rm-datasource # AT 模式核心驱动：数据源代理、Druid SQL 解析、前后镜像构建、UndoLog 管理与补偿
+├── seata-server        # TC 事务协调器：全局事务提交/回滚调度、全局锁管理与异步分支调度
+├── seata-tm            # TM 事务管理器：GlobalTransaction API、TransactionalTemplate 编程式事务模板
+└── seata-examples      # 端到端演练示例：H2 内存库 + 内嵌 TC 的一键运行 Demo
 ```
 
 ### 1. `seata-common`：基础公共组件
@@ -245,10 +248,10 @@ try {
 
 ```bash
 # 运行全链路端到端自动化测试（覆盖 2PC 提交、反向补偿回滚与行锁冲突）
-mvn test -pl examples -Dtest=EndToEndIntegrationTest
+mvn test -pl seata-examples -Dtest=EndToEndIntegrationTest
 
 # 或运行可交互的端到端演练主程序
-mvn exec:java -pl examples -Dexec.mainClass="io.spring2go.seata.examples.DemoApp"
+mvn exec:java -pl seata-examples -Dexec.mainClass="io.spring2go.seata.examples.DemoApp"
 ```
 
 该演示包含以下完整闭环：
@@ -280,8 +283,8 @@ mvn clean compile
 
 ## 📚 学习与调试建议
 
-1. **学习 Netty 协议解析**：从 `core` 模块中的 `MessageCodecHandler` 入手，观察 `0xdada` 魔数、包头解析以及半包/粘包的处理方式。
-2. **学习 SQL 语法树识别**：重点阅读 `rm-datasource` 下的 `SQLVisitorFactory` 和 `MySQLUpdateRecognizer`，体会 Druid AST 如何提取 Table Name、Where 条件与更新字段列表。
+1. **学习 Netty 协议解析**：从 `seata-core` 模块中的 `MessageCodecHandler` 入手，观察 `0xdada` 魔数、包头解析以及半包/粘包的处理方式。
+2. **学习 SQL 语法树识别**：重点阅读 `seata-rm-datasource` 下的 `SQLVisitorFactory` 和 `MySQLUpdateRecognizer`，体会 Druid AST 如何提取 Table Name、Where 条件与更新字段列表。
 3. **学习前后镜像与脏写防御**：跟踪 `AbstractDMLBaseExecutor.execute()` $\to$ `TableRecords` 的构建，以及 `UndoLogManager.undo()` 中针对当前数据与 `afterImage` 的比对逻辑。
 
 ---
