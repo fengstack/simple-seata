@@ -14,11 +14,11 @@
         <module>rm-datasource</module>
         <module>server</module>
         <module>tm</module>
+        <module>examples</module>
         <!--module>distribution</module>
         <module>spring</module>
         <module>dubbo</module>
-        <module>test</module>
-        <module>examples</module-->
+        <module>test</module-->
     </modules>
     <packaging>pom</packaging>
 
@@ -99,12 +99,12 @@
         </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
-            <artifactId>seata-test</artifactId>
+            <artifactId>seata-examples</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <dependency>
+        <!-dependency>
             <groupId>${project.groupId}</groupId>
-            <artifactId>seata-examples</artifactId>
+            <artifactId>seata-test</artifactId>
             <version>${project.version}</version>
         </dependency-->
         <dependency>
@@ -163,6 +163,11 @@
             <groupId>commons-pool</groupId>
             <artifactId>commons-pool</artifactId>
             <version>1.6</version>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>1.4.200</version>
         </dependency>
         <dependency>
             <groupId>junit</groupId>
