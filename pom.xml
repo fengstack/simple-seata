@@ -13,8 +13,8 @@
         <module>core</module>
         <module>rm-datasource</module>
         <module>server</module>
-        <!--module>distribution</module>
         <module>tm</module>
+        <!--module>distribution</module>
         <module>spring</module>
         <module>dubbo</module>
         <module>test</module>
@@ -72,11 +72,6 @@
             <artifactId>seata-rm-datasource</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!--dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>seata-client</artifactId>
-            <version>${project.version}</version>
-        </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>seata-server</artifactId>
@@ -85,6 +80,11 @@
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>seata-tm</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!--dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>seata-client</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
