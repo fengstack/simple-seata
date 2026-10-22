@@ -46,3 +46,6 @@ Thumbs.db
 
 #h2
 *.db
+
+docs/
+mise.toml
