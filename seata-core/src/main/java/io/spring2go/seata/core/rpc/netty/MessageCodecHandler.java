@@ -90,8 +90,14 @@ public class MessageCodecHandler extends ByteToMessageCodec<RpcMessage> {
         int begin = in.readerIndex();
         int magicIndex = getMagicIndex(in);
         if (magicIndex == NOT_FOUND_INDEX) {
-            LOGGER.error("codec decode not found magic offset");
-            in.skipBytes(in.readableBytes());
+            // 半包：可能 magic 两个字节只到了一半。最多只剩 2 个字节时直接等下一次数据，
+            // 千万不能把字节丢掉，否则整个字节流就错位了
+            if (in.readableBytes() <= 2) {
+                return;
+            }
+            // 真正的脏数据才丢弃，并且保留最后 1 个字节——它可能是下一个 magic 的前半段
+            LOGGER.error("codec decode not found magic offset, discard dirty bytes");
+            in.skipBytes(in.readableBytes() - 1);
             return;
         }
         if (magicIndex != 0 && LOGGER.isInfoEnabled()) {
@@ -99,7 +105,10 @@ public class MessageCodecHandler extends ByteToMessageCodec<RpcMessage> {
         }
         in.skipBytes(magicIndex - in.readerIndex());
         if (in.readableBytes() < HEAD_LENGHT) {
-            LOGGER.error("decode less than header length");
+            // 半包：报文头（14 字节定长）还没到齐，等下一次数据，这是正常现象
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("decode wait more bytes for header");
+            }
             return;
         }
         byte[] buffer = new byte[HEAD_LENGHT];

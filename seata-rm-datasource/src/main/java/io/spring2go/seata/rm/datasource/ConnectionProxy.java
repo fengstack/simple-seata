@@ -138,6 +138,16 @@ public class ConnectionProxy extends AbstractConnectionProxy {
         }
     }
 
+    /**
+     * 供锁冲突重试使用：回滚物理事务并清空本轮已积累的 undo 项，
+     * 但保留 XID 绑定——下一轮重试仍以同一个全局事务的身份去申请锁。
+     * （不能用 rollback()，它会把 XID 一起清掉，导致重试轮次失去全局事务上下文。）
+     */
+    public void rollbackForRetry() throws SQLException {
+        targetConnection.rollback();
+        context.reset(context.getXid());
+    }
+
     private void register() throws TransactionException {
         Long branchId = DataSourceManager.get().branchRegister(BranchType.AT, getDataSourceProxy().getResourceId(),
                 null, context.getXid(), context.buildLockKeys());

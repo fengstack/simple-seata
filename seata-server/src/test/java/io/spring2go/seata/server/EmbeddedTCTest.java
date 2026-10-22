@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.junit.Test;
 
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.net.Socket;
 
 public class EmbeddedTCTest {
@@ -27,5 +28,31 @@ public class EmbeddedTCTest {
         // 3. 停止内嵌服务端
         embeddedTC.stop();
         Assert.assertFalse(embeddedTC.isStarted());
+    }
+
+    /**
+     * 场景：端口已被占用时启动 EmbeddedTC。
+     * 要求：直接报"端口被占用"错误（而不是干等 3 秒后报一个含糊的超时），
+     * 失败后状态干净，之后换一个端口还能正常启动。
+     */
+    @Test
+    public void testStartFailsCleanlyOnOccupiedPort() throws Exception {
+        EmbeddedTC embeddedTC = EmbeddedTC.getInstance();
+
+        try (ServerSocket occupied = new ServerSocket(8093)) { // 先占住端口
+            try {
+                embeddedTC.start(8093);
+                Assert.fail("Expected start failure on occupied port");
+            } catch (RuntimeException e) {
+                Assert.assertTrue("Error should mention port in use but was: " + e.getMessage(),
+                        e.getMessage().contains("already in use"));
+            }
+        }
+
+        // 启动失败后状态必须干净：未启动，且换端口可以正常启动
+        Assert.assertFalse(embeddedTC.isStarted());
+        embeddedTC.start(8094);
+        Assert.assertTrue(embeddedTC.isStarted());
+        embeddedTC.stop();
     }
 }

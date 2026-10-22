@@ -33,6 +33,7 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
 
     private static final AtomicLong TRANSACTION_ID_GENERATOR = new AtomicLong(1000);
     private static final AtomicLong BRANCH_ID_GENERATOR = new AtomicLong(10000);
+    private static final long DEFAULT_GLOBAL_TX_TIMEOUT = 60000;
 
     public DefaultCoordinator(SessionManager sessionManager, LockManager lockManager, ServerMessageSender serverMessageSender) {
         this.sessionManager = sessionManager != null ? sessionManager : new SessionManager();
@@ -117,12 +118,18 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
         try {
             long txId = request.getTransactionId();
             GlobalSession session = sessionManager.findGlobalSession(txId);
-            if (session != null) {
-                BranchSession branch = session.getBranch(request.getBranchId());
-                if (branch != null) {
-                    branch.setStatus(request.getStatus());
-                }
+            if (session == null) {
+                response.setResultCode(ResultCode.Failed);
+                response.setMsg("Global transaction [" + txId + "] not found");
+                return response;
             }
+            BranchSession branch = session.getBranch(request.getBranchId());
+            if (branch == null) {
+                response.setResultCode(ResultCode.Failed);
+                response.setMsg("Branch [" + request.getBranchId() + "] not found in tx [" + txId + "]");
+                return response;
+            }
+            branch.setStatus(request.getStatus());
             response.setResultCode(ResultCode.Success);
         } catch (Exception ex) {
             LOGGER.error("Failed to report branch status for tx [" + request.getTransactionId() + "]", ex);
@@ -139,40 +146,17 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
             long txId = request.getTransactionId();
             GlobalSession session = sessionManager.findGlobalSession(txId);
             if (session == null) {
+                // 会话已不存在，说明之前已经提交完成（TM 重试时可能再次到达），直接幂等返回成功
                 response.setGlobalStatus(GlobalStatus.Committed);
                 response.setResultCode(ResultCode.Success);
                 return response;
             }
 
-            session.changeStatus(GlobalStatus.Committing);
+            completeCommit(session);
 
-            // 二阶段提交调度
-            if (serverMessageSender != null) {
-                for (BranchSession branch : session.getBranchSessions()) {
-                    try {
-                        BranchCommitRequest branchCommitRequest = new BranchCommitRequest();
-                        branchCommitRequest.setXid(session.getXid());
-                        branchCommitRequest.setBranchId(branch.getBranchId());
-                        branchCommitRequest.setResourceId(branch.getResourceId());
-                        branchCommitRequest.setBranchType(branch.getBranchType());
-
-                        String clientAppName = branch.getClientId();
-                        String clientIp = branch.getClientIp();
-                        serverMessageSender.sendSynRequest(branch.getResourceId(), clientIp, clientAppName, branchCommitRequest, 3000);
-                    } catch (Exception e) {
-                        LOGGER.error("Failed to dispatch BranchCommit to branch [" + branch.getBranchId() + "]", e);
-                    }
-                }
-            }
-
-            // 释放全局锁并更新状态
-            lockManager.releaseLocks(session);
-            session.changeStatus(GlobalStatus.Committed);
-            sessionManager.removeGlobalSession(session);
-
-            response.setGlobalStatus(GlobalStatus.Committed);
+            response.setGlobalStatus(session.getStatus());
             response.setResultCode(ResultCode.Success);
-            if (LOGGER.isInfoEnabled()) {
+            if (session.getStatus() == GlobalStatus.Committed && LOGGER.isInfoEnabled()) {
                 LOGGER.info("Successfully committed global transaction [" + txId + "]");
             }
         } catch (Exception ex) {
@@ -190,42 +174,17 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
             long txId = request.getTransactionId();
             GlobalSession session = sessionManager.findGlobalSession(txId);
             if (session == null) {
+                // 会话已不存在，说明之前已经回滚完成（TM 重试时可能再次到达），直接幂等返回成功
                 response.setGlobalStatus(GlobalStatus.Rollbacked);
                 response.setResultCode(ResultCode.Success);
                 return response;
             }
 
-            session.changeStatus(GlobalStatus.Rollbacking);
+            completeRollback(session);
 
-            // 二阶段逆序回滚调度
-            if (serverMessageSender != null) {
-                List<BranchSession> branches = session.getBranchSessions();
-                for (int i = branches.size() - 1; i >= 0; i--) {
-                    BranchSession branch = branches.get(i);
-                    try {
-                        BranchRollbackRequest branchRollbackRequest = new BranchRollbackRequest();
-                        branchRollbackRequest.setXid(session.getXid());
-                        branchRollbackRequest.setBranchId(branch.getBranchId());
-                        branchRollbackRequest.setResourceId(branch.getResourceId());
-                        branchRollbackRequest.setBranchType(branch.getBranchType());
-
-                        String clientAppName = branch.getClientId();
-                        String clientIp = branch.getClientIp();
-                        serverMessageSender.sendSynRequest(branch.getResourceId(), clientIp, clientAppName, branchRollbackRequest, 3000);
-                    } catch (Exception e) {
-                        LOGGER.error("Failed to dispatch BranchRollback to branch [" + branch.getBranchId() + "]", e);
-                    }
-                }
-            }
-
-            // 释放全局锁并更新状态
-            lockManager.releaseLocks(session);
-            session.changeStatus(GlobalStatus.Rollbacked);
-            sessionManager.removeGlobalSession(session);
-
-            response.setGlobalStatus(GlobalStatus.Rollbacked);
+            response.setGlobalStatus(session.getStatus());
             response.setResultCode(ResultCode.Success);
-            if (LOGGER.isInfoEnabled()) {
+            if (session.getStatus() == GlobalStatus.Rollbacked && LOGGER.isInfoEnabled()) {
                 LOGGER.info("Successfully rollbacked global transaction [" + txId + "]");
             }
         } catch (Exception ex) {
@@ -234,6 +193,133 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
             response.setMsg(ex.getMessage());
         }
         return response;
+    }
+
+    /**
+     * 二阶段提交：向所有 RM 分支派发 BranchCommitRequest。
+     * 只有所有分支都成功才算是完成；任何一个分支失败都不能宣布提交成功，
+     * 会话保留在 CommitRetrying 状态，等 timeoutCheck() 线程重试。
+     */
+    private void completeCommit(GlobalSession session) {
+        session.changeStatus(GlobalStatus.Committing);
+        boolean allBranchesDone = dispatchBranchCommit(session);
+
+        if (allBranchesDone) {
+            // 所有分支提交成功：释放全局锁，删除会话
+            lockManager.releaseLocks(session);
+            session.changeStatus(GlobalStatus.Committed);
+            sessionManager.removeGlobalSession(session);
+        } else {
+            session.changeStatus(GlobalStatus.CommitRetrying);
+            LOGGER.error("Global transaction [" + session.getXid() + "] branch commit failed, will retry later");
+        }
+    }
+
+    /**
+     * 二阶段回滚：按注册的逆序向所有 RM 分支派发 BranchRollbackRequest。
+     * 只有所有分支都补偿成功才算是完成；任何一个分支失败都不能宣布回滚成功，
+     * 否则数据不一致且再也没人补偿。会话保留在 RollbackRetrying 状态重试。
+     */
+    private void completeRollback(GlobalSession session) {
+        session.changeStatus(GlobalStatus.Rollbacking);
+        boolean allBranchesDone = dispatchBranchRollback(session);
+
+        if (allBranchesDone) {
+            lockManager.releaseLocks(session);
+            session.changeStatus(GlobalStatus.Rollbacked);
+            sessionManager.removeGlobalSession(session);
+        } else {
+            session.changeStatus(GlobalStatus.RollbackRetrying);
+            LOGGER.error("Global transaction [" + session.getXid() + "] branch rollback failed, will retry later");
+        }
+    }
+
+    private boolean dispatchBranchCommit(GlobalSession session) {
+        // 没有消息发送器（比如单元测试里直连 coordinator）时，视为没有分支需要派发
+        if (serverMessageSender == null) {
+            return true;
+        }
+        boolean allDone = true;
+        for (BranchSession branch : session.getBranchSessions()) {
+            try {
+                BranchCommitRequest branchCommitRequest = new BranchCommitRequest();
+                branchCommitRequest.setXid(session.getXid());
+                branchCommitRequest.setBranchId(branch.getBranchId());
+                branchCommitRequest.setResourceId(branch.getResourceId());
+                branchCommitRequest.setBranchType(branch.getBranchType());
+
+                Object result = serverMessageSender.sendSynRequest(branch.getResourceId(),
+                        branch.getClientIp(), branch.getClientId(), branchCommitRequest, 3000);
+
+                // RM 返回的分支状态也必须检查：请求送达了，但 RM 可能执行失败
+                if (!(result instanceof AbstractBranchEndResponse)
+                        || ((AbstractBranchEndResponse) result).getBranchStatus() != BranchStatus.PhaseTwo_Committed) {
+                    allDone = false;
+                }
+            } catch (Exception e) {
+                allDone = false;
+                LOGGER.error("Failed to dispatch BranchCommit to branch [" + branch.getBranchId() + "]", e);
+            }
+        }
+        return allDone;
+    }
+
+    private boolean dispatchBranchRollback(GlobalSession session) {
+        if (serverMessageSender == null) {
+            return true;
+        }
+        boolean allDone = true;
+        List<BranchSession> branches = session.getBranchSessions();
+        for (int i = branches.size() - 1; i >= 0; i--) {
+            BranchSession branch = branches.get(i);
+            try {
+                BranchRollbackRequest branchRollbackRequest = new BranchRollbackRequest();
+                branchRollbackRequest.setXid(session.getXid());
+                branchRollbackRequest.setBranchId(branch.getBranchId());
+                branchRollbackRequest.setResourceId(branch.getResourceId());
+                branchRollbackRequest.setBranchType(branch.getBranchType());
+
+                Object result = serverMessageSender.sendSynRequest(branch.getResourceId(),
+                        branch.getClientIp(), branch.getClientId(), branchRollbackRequest, 3000);
+
+                if (!(result instanceof AbstractBranchEndResponse)
+                        || ((AbstractBranchEndResponse) result).getBranchStatus() != BranchStatus.PhaseTwo_Rollbacked) {
+                    allDone = false;
+                }
+            } catch (Exception e) {
+                allDone = false;
+                LOGGER.error("Failed to dispatch BranchRollback to branch [" + branch.getBranchId() + "]", e);
+            }
+        }
+        return allDone;
+    }
+
+    /**
+     * 超时检查，由定时线程周期调用（见 EmbeddedTC）。做两件事：
+     * 1. Begin 状态超过 timeout 还没提交/回滚的全局事务（TM 可能已经宕机），
+     *    自动驱动回滚，避免会话和行锁永久占用；
+     * 2. 二阶段没做完的会话（CommitRetrying / RollbackRetrying）继续重试。
+     */
+    public void timeoutCheck() {
+        for (GlobalSession session : sessionManager.allSessions()) {
+            try {
+                if (session.getStatus() == GlobalStatus.Begin && isTimeout(session)) {
+                    LOGGER.warn("Global transaction [" + session.getXid() + "] timed out, auto rollback");
+                    completeRollback(session);
+                } else if (session.getStatus() == GlobalStatus.CommitRetrying) {
+                    completeCommit(session);
+                } else if (session.getStatus() == GlobalStatus.RollbackRetrying) {
+                    completeRollback(session);
+                }
+            } catch (Exception ex) {
+                LOGGER.error("Timeout check failed for global transaction [" + session.getXid() + "]", ex);
+            }
+        }
+    }
+
+    private boolean isTimeout(GlobalSession session) {
+        long timeout = session.getTimeout() > 0 ? session.getTimeout() : DEFAULT_GLOBAL_TX_TIMEOUT;
+        return System.currentTimeMillis() - session.getBeginTime() > timeout;
     }
 
     @Override

@@ -1,6 +1,7 @@
 package io.spring2go.seata.rm.datasource.exec;
 
 import io.spring2go.seata.rm.datasource.AbstractConnectionProxy;
+import io.spring2go.seata.rm.datasource.ConnectionProxy;
 import io.spring2go.seata.rm.datasource.StatementProxy;
 import io.spring2go.seata.rm.datasource.sql.SQLRecognizer;
 import io.spring2go.seata.rm.datasource.sql.struct.TableRecords;
@@ -36,23 +37,33 @@ public abstract class AbstractDMLBaseExecutor<T, S extends Statement> extends Ba
 
     protected T executeAutoCommitTrue(Object[] args) throws Throwable {
         T result = null;
-        AbstractConnectionProxy connectionProxy = statementProxy.getConnectionProxy();
+        ConnectionProxy connectionProxy = statementProxy.getConnectionProxy();
         LockRetryController lockRetryController = new LockRetryController();
+        boolean committed = false;
         try {
             connectionProxy.setAutoCommit(false);
             while (true) {
                 try {
                     result = executeAutoCommitFalse(args);
                     connectionProxy.commit();
+                    committed = true;
                     break;
                 } catch (LockConflictException lockConflict) {
+                    // 关键：重试前必须先回滚本地事务（rollbackForRetry 会保留 XID）。
+                    // 否则业务 SQL 会在同一个未提交的本地事务里再执行一遍
+                    // （比如"扣 5 件库存"变成扣 10 件），undo_log 也会重复。
+                    connectionProxy.rollbackForRetry();
                     lockRetryController.sleep(lockConflict);
                 }
             }
 
         } finally {
-            connectionProxy.setAutoCommit(true);
-
+            // 注意这里直接操作 targetConnection：物理回滚不会发任何 RPC，也不会抛出新异常，
+            // 保证不掩盖 catch/while 里抛出的原始异常
+            if (!committed) {
+                connectionProxy.getTargetConnection().rollback();
+            }
+            connectionProxy.getTargetConnection().setAutoCommit(true);
         }
         return result;
     }
