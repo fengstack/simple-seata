@@ -1,21 +1,16 @@
 package io.spring2go.seata.core.rpc.netty;
 
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandler;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.timeout.IdleStateEvent;
-import io.netty.util.concurrent.EventExecutorGroup;
 import io.netty.channel.ChannelHandler.Sharable;
+import io.netty.util.concurrent.EventExecutorGroup;
 import io.spring2go.seata.common.XID;
 import io.spring2go.seata.common.exception.FrameworkErrorCode;
 import io.spring2go.seata.common.exception.FrameworkException;
 import io.spring2go.seata.common.thread.NamedThreadFactory;
-import io.spring2go.seata.common.util.NetUtil;
 import io.spring2go.seata.core.context.RootContext;
 import io.spring2go.seata.core.model.Resource;
 import io.spring2go.seata.core.model.ResourceManager;
 import io.spring2go.seata.core.protocol.AbstractMessage;
-import io.spring2go.seata.core.protocol.HeartbeatMessage;
 import io.spring2go.seata.core.protocol.RegisterRMRequest;
 import io.spring2go.seata.core.protocol.RegisterRMResponse;
 import org.apache.commons.pool.impl.GenericKeyedObjectPool;
@@ -27,62 +22,37 @@ import static io.spring2go.seata.common.Constants.DBKEYS_SPLIT_CHAR;
 
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
- * Created by william on May, 2020
+ * RM 客户端：向 TC 注册自己管理的数据源资源（resourceId），
+ * 并接收 TC 在二阶段下发的 BranchCommit/BranchRollback 指令。
  */
 @Sharable
 public class RmRpcClient extends AbstractRpcRemotingClient {
     private static final Logger LOGGER = LoggerFactory.getLogger(RmRpcClient.class);
 
-    private ResourceManager resourceManager;
-
-    private String applicationId;
-
-    private String transactionServiceGroup;
-
     private static volatile RmRpcClient instance;
-    private final ConcurrentMap<String, Object> channelLocks = new ConcurrentHashMap<String, Object>();
-    private final ConcurrentMap<String, NettyPoolKey> poolKeyMap = new ConcurrentHashMap<String, NettyPoolKey>();
-    private final ConcurrentMap<String, Channel> channels = new ConcurrentHashMap<>();
-    private String customerKeys;
-    private final AtomicBoolean initialized = new AtomicBoolean(false);
-    private static final int MAX_MERGE_SEND_THREAD = 1;
     private static final long KEEP_ALIVE_TIME = Integer.MAX_VALUE;
     private static final int MAX_QUEUE_SIZE = 20000;
-    private static final int SCHEDULE_INTERVAL_MILLS = 5;
-    private static final String MERGE_THREAD_PREFIX = "rpcMergeMessageSend";
-    private final NettyClientConfig rmClientConfig;
 
-    private RmRpcClient(NettyClientConfig nettyClientConfig) {
-        super(nettyClientConfig);
-        this.rmClientConfig = nettyClientConfig;
-    }
+    private ResourceManager resourceManager;
+    private String applicationId;
+    private String transactionServiceGroup;
+    private String customerKeys;
 
     private RmRpcClient(NettyClientConfig nettyClientConfig, EventExecutorGroup eventExecutorGroup,
                         ThreadPoolExecutor messageExecutor) {
         super(nettyClientConfig, eventExecutorGroup, messageExecutor);
-        this.rmClientConfig = nettyClientConfig;
     }
 
-    /**
-     * Sets resource manager.
-     *
-     * @param resourceManager the resource manager
-     */
     public void setResourceManager(ResourceManager resourceManager) {
         this.resourceManager = resourceManager;
     }
 
-    /**
-     * Gets instance.
-     *
-     * @param applicationId           the application id
-     * @param transactionServiceGroup the transaction service group
-     * @return the instance
-     */
     public static RmRpcClient getInstance(String applicationId, String transactionServiceGroup) {
         RmRpcClient rmRpcClient = getInstance();
         rmRpcClient.setApplicationId(applicationId);
@@ -90,11 +60,6 @@ public class RmRpcClient extends AbstractRpcRemotingClient {
         return rmRpcClient;
     }
 
-    /**
-     * Gets instance.
-     *
-     * @return the instance
-     */
     public static RmRpcClient getInstance() {
         if (null == instance) {
             synchronized (RmRpcClient.class) {
@@ -103,7 +68,7 @@ public class RmRpcClient extends AbstractRpcRemotingClient {
                     final ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(
                             nettyClientConfig.getClientWorkerThreads(), nettyClientConfig.getClientWorkerThreads(),
                             KEEP_ALIVE_TIME, TimeUnit.SECONDS,
-                            new LinkedBlockingQueue(MAX_QUEUE_SIZE),
+                            new LinkedBlockingQueue<Runnable>(MAX_QUEUE_SIZE),
                             new NamedThreadFactory(nettyClientConfig.getRmDispatchThreadPrefix(),
                                     nettyClientConfig.getClientWorkerThreads()),
                             new ThreadPoolExecutor.CallerRunsPolicy());
@@ -114,53 +79,32 @@ public class RmRpcClient extends AbstractRpcRemotingClient {
         return instance;
     }
 
-    @Override
-    public void init() {
-        if (initialized.compareAndSet(false, true)) {
-            super.init();
-            timerExecutor.scheduleAtFixedRate(new Runnable() {
-                @Override
-                public void run() {
-                    reconnect();
-                }
-            }, SCHEDULE_INTERVAL_MILLS, SCHEDULE_INTERVAL_MILLS, TimeUnit.SECONDS);
-            ExecutorService mergeSendExecutorService = new ThreadPoolExecutor(MAX_MERGE_SEND_THREAD,
-                    MAX_MERGE_SEND_THREAD,
-                    KEEP_ALIVE_TIME, TimeUnit.MILLISECONDS,
-                    new LinkedBlockingQueue<Runnable>(),
-                    new NamedThreadFactory(getThreadPrefix(MERGE_THREAD_PREFIX), MAX_MERGE_SEND_THREAD));
-            mergeSendExecutorService.submit(new MergedSendRunnable());
-        }
-    }
-
-    /**
-     * Sets application id.
-     *
-     * @param applicationId the application id
-     */
     public void setApplicationId(String applicationId) {
         this.applicationId = applicationId;
     }
 
-    /**
-     * Sets transaction service group.
-     *
-     * @param transactionServiceGroup the transaction service group
-     */
+    public String getTransactionServiceGroup() {
+        return transactionServiceGroup;
+    }
+
     public void setTransactionServiceGroup(String transactionServiceGroup) {
         this.transactionServiceGroup = transactionServiceGroup;
     }
 
     @Override
-    protected GenericKeyedObjectPool.Config getNettyPoolConfig() {
-        GenericKeyedObjectPool.Config poolConfig = new GenericKeyedObjectPool.Config();
-        poolConfig.maxActive = rmClientConfig.getMaxPoolActive();
-        poolConfig.minIdle = rmClientConfig.getMinPoolIdle();
-        poolConfig.maxWait = rmClientConfig.getMaxAcquireConnMills();
-        poolConfig.testOnBorrow = rmClientConfig.isPoolTestBorrow();
-        poolConfig.testOnReturn = rmClientConfig.isPoolTestReturn();
-        poolConfig.lifo = rmClientConfig.isPoolFifo();
-        return poolConfig;
+    protected AbstractMessage buildRegisterMessage(String serverAddress) {
+        RegisterRMRequest message = new RegisterRMRequest(applicationId, transactionServiceGroup);
+        message.setResourceIds(customerKeys == null ? getMergedResourceKeys(resourceManager) : customerKeys);
+        return message;
+    }
+
+    @Override
+    protected NettyPoolKey getPoolKey(String serverAddress) {
+        NettyPoolKey poolKey = super.getPoolKey(serverAddress);
+        // 复用已创建的注册报文，每次借用前刷新资源列表（可能有新数据源注册进来）
+        ((RegisterRMRequest) poolKey.getMessage()).setResourceIds(
+                customerKeys == null ? getMergedResourceKeys(resourceManager) : customerKeys);
+        return poolKey;
     }
 
     @Override
@@ -168,303 +112,64 @@ public class RmRpcClient extends AbstractRpcRemotingClient {
         return TransactionRole.RMROLE;
     }
 
-    private void reconnect() {
-        for (String serverAddress : serviceManager.lookup(transactionServiceGroup)) {
-            if (serverAddress != null) {
-                try {
-                    connect(serverAddress);
-                } catch (Exception e) {
-                    LOGGER.error(FrameworkErrorCode.NetConnect.errCode,
-                            "can not connect to " + serverAddress + " cause:" + e.getMessage(), e);
-                }
-            }
-        }
-    }
-
-    @Override
-    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        if (messageExecutor.isShutdown()) {
-            return;
-        }
-        if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("channel inactive:" + ctx.channel());
-        }
-        releaseChannel(ctx.channel(), NetUtil.toStringAddress(ctx.channel().remoteAddress()));
-        super.channelInactive(ctx);
-    }
-
+    /**
+     * RM 的指令都服务于当前全局事务，所以直接按 XID 里记录的 TC 地址发送。
+     */
     @Override
     public Object sendMsgWithResponse(Object msg, long timeout) throws TimeoutException {
-        return super.sendAsyncRequestWithResponse(XID.getServerAddress(RootContext.getXID()),
-                getRemoteServerChannel(), msg,
-                timeout);
+        String serverAddress = RootContext.inGlobalTransaction() ? XID.getServerAddress(RootContext.getXID()) : null;
+        Channel channel = serverAddress == null ? null : connect(serverAddress);
+        return super.sendAsyncRequestWithResponse(serverAddress, channel, msg, timeout);
     }
 
-    @Override
-    public Object sendMsgWithResponse(String serverAddress, Object msg, long timeout) throws TimeoutException {
-        return super.sendAsyncRequestWithResponse(serverAddress, connect(serverAddress), msg, timeout);
-    }
-
-    private Channel getRemoteServerChannel() {
-        String serverAddress = null;
-        if (!RootContext.inGlobalTransaction()) {
-            return null;
-        }
-        serverAddress = XID.getServerAddress(RootContext.getXID());
-        return connect(serverAddress);
-    }
-
-    @Override
-    public Object sendMsgWithResponse(Object msg) throws TimeoutException {
-        return sendMsgWithResponse(msg, NettyClientConfig.getRpcRequestTimeout());
-    }
-
-    @Override
-    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
-        if (evt instanceof IdleStateEvent) {
-            IdleStateEvent idleStateEvent = (IdleStateEvent)evt;
-            if (idleStateEvent == IdleStateEvent.READER_IDLE_STATE_EVENT) {
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("RmRpcClient channel" + ctx.channel() + " idle.");
-                }
-                try {
-                    nettyClientKeyPool.invalidateObject(poolKeyMap.get(ctx.channel().remoteAddress()), ctx.channel());
-                } catch (Exception exx) {
-                    LOGGER.error(exx.getMessage());
-                } finally {
-                    releaseChannel(ctx.channel(), getAddressFromContext(ctx));
-                }
-            }
-            if (idleStateEvent == IdleStateEvent.WRITER_IDLE_STATE_EVENT) {
-                try {
-                    sendRequest(ctx.channel(), HeartbeatMessage.PING);
-                } catch (Throwable throwable) {
-                    LOGGER.error("", "send request error", throwable);
-                }
-            }
-        }
-    }
-
-    /**
-     * Release channel.
-     *
-     * @param channel       the channel
-     * @param serverAddress the server address
-     */
-    public void releaseChannel(Channel channel, String serverAddress) {
-        if (null == channel || null == serverAddress) { return; }
-        Object connectLock = channelLocks.get(serverAddress);
-        try {
-            synchronized (connectLock) {
-                Channel ch = channels.get(serverAddress);
-                if (null == ch) {
-                    nettyClientKeyPool.returnObject(poolKeyMap.get(serverAddress), channel);
-                    return;
-                }
-                if (ch.compareTo(channel) == 0) {
-                    if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("return to pool, rm channel:" + channel);
-                    }
-                    destroyChannel(serverAddress, channel);
-                } else {
-                    nettyClientKeyPool.returnObject(poolKeyMap.get(serverAddress), channel);
-                }
-            }
-        } catch (Exception exx) {
-            LOGGER.error(exx.getMessage());
-        }
-    }
-
-    @Override
-    protected Channel connect(String serverAddress) {
-        Channel channelToServer = channels.get(serverAddress);
-        if (channelToServer != null) {
-            channelToServer = getExistAliveChannel(channelToServer, serverAddress);
-            if (null != channelToServer) {
-                return channelToServer;
-            }
-        }
+    /** 新数据源初始化时调用：向所有已连接的 TC 补发一次资源注册 */
+    public void registerResource(String resourceGroupId, String resourceId) {
         if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("will connect to " + serverAddress);
+            LOGGER.info("register AT resourceId:" + resourceId);
         }
-        channelLocks.putIfAbsent(serverAddress, new Object());
-        Object connectLock = channelLocks.get(serverAddress);
-        synchronized (connectLock) {
-            Channel channel = doConnect(serverAddress);
-            return channel;
-        }
-    }
-
-    /**
-     * Connect channel.
-     *
-     * @param serverAddress the server address
-     * @return the channel
-     */
-    private Channel doConnect(String serverAddress) {
-        Channel channelToServer = channels.get(serverAddress);
-        if (channelToServer != null && channelToServer.isActive()) {
-            return channelToServer;
-        }
-        Channel channelFromPool = null;
-        try {
-            String resourceIds = customerKeys == null ? getMergedResourceKeys(resourceManager) : customerKeys;
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("RM will register :" + resourceIds);
-            }
-            RegisterRMRequest message = null;
-            if (null == poolKeyMap.get(serverAddress)) {
-                message = new RegisterRMRequest(applicationId, transactionServiceGroup);
-                message.setResourceIds(resourceIds);
-                poolKeyMap.putIfAbsent(serverAddress,
-                        new NettyPoolKey(getTransactionRole(), serverAddress, message));
-            } else {
-                message = (RegisterRMRequest)poolKeyMap.get(serverAddress).getMessage();
-                message.setResourceIds(resourceIds);
-            }
-            channelFromPool = nettyClientKeyPool.borrowObject(poolKeyMap.get(serverAddress));
-        } catch (Exception exx) {
-            LOGGER.error(FrameworkErrorCode.RegistRM.errCode, "register RM failed.", exx);
-            throw new FrameworkException("can not register RM,err:" + exx.getMessage());
-        }
-        return channelFromPool;
-    }
-
-    private Channel getExistAliveChannel(Channel rmChannel, String serverAddress) {
-        if (rmChannel.isActive()) {
-            return rmChannel;
-        } else {
-            int i = 0;
-            for (; i < NettyClientConfig.getMaxCheckAliveRetry(); i++) {
-                try {
-                    Thread.sleep(NettyClientConfig.getCheckAliveInternal());
-                } catch (InterruptedException exx) {
-                    LOGGER.error(exx.getMessage());
-                }
-                rmChannel = channels.get(serverAddress);
-                if (null == rmChannel || rmChannel.isActive()) {
-                    return rmChannel;
-                }
-            }
-            if (i == NettyClientConfig.getMaxCheckAliveRetry()) {
-                LOGGER.warn("channel " + rmChannel + " is not active after long wait, close it.");
-                releaseChannel(rmChannel, serverAddress);
-                return null;
+        synchronized (channels) {
+            for (Map.Entry<String, Channel> entry : channels.entrySet()) {
+                sendRegisterMessage(entry.getKey(), entry.getValue(), resourceId);
             }
         }
-        return null;
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        LOGGER.error(FrameworkErrorCode.ExceptionCaught.errCode,
-                NetUtil.toStringAddress(ctx.channel().remoteAddress()) + "connect exception. " + cause.getMessage(),
-                cause);
-        releaseChannel(ctx.channel(), getAddressFromChannel(ctx.channel()));
-        if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("remove exception rm channel:" + ctx.channel());
-        }
-        super.exceptionCaught(ctx, cause);
     }
 
     private void sendRegisterMessage(String serverAddress, Channel channel, String dbKey) {
-        RegisterRMRequest message = new RegisterRMRequest(applicationId,
-                transactionServiceGroup);
+        RegisterRMRequest message = new RegisterRMRequest(applicationId, transactionServiceGroup);
         message.setResourceIds(dbKey);
         try {
             super.sendAsyncRequestWithoutResponse(null, channel, message);
         } catch (FrameworkException e) {
-            if (e.getErrcode() == FrameworkErrorCode.ChannelIsNotWritable
-                    && serverAddress != null) {
+            if (e.getErrcode() == FrameworkErrorCode.ChannelIsNotWritable && serverAddress != null) {
                 releaseChannel(channel, serverAddress);
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("remove channel:" + channel);
-                }
             } else {
-                LOGGER.error("", "register failed", e);
+                LOGGER.error("", "register resource failed", e);
             }
         } catch (TimeoutException e) {
             LOGGER.error(e.getMessage());
         }
     }
 
-    /**
-     * Register new db key.
-     *
-     * @param resourceGroupId the resource group id
-     * @param resourceId      the db key
-     */
-    public void registerResource(String resourceGroupId, String resourceId) {
-        if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("register to RM resourceId:" + resourceId);
-        }
-        synchronized (channels) {
-            for (Map.Entry<String, Channel> entry : channels.entrySet()) {
-                String serverAddress = entry.getKey();
-                Channel rmChannel = entry.getValue();
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("register AT resourceId:" + resourceId);
-                }
-                sendRegisterMessage(serverAddress, rmChannel, resourceId);
-            }
-        }
-    }
-
-    @Override
-    public void sendResponse(long msgId, String serverAddress, Object msg) {
-        if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("RmRpcClient sendResponse " + msg);
-        }
-        super.sendResponse(msgId, connect(serverAddress), msg);
-    }
-
-    /**
-     * Gets customer keys.
-     *
-     * @return the customer keys
-     */
-    public String getCustomerKeys() {
-        return customerKeys;
-    }
-
-    /**
-     * Sets customer keys.
-     *
-     * @param customerKeys the customer keys
-     */
-    public void setCustomerKeys(String customerKeys) {
-        this.customerKeys = customerKeys;
-    }
-
     @Override
     public void onRegisterMsgSuccess(String serverAddress, Channel channel, Object response,
                                      AbstractMessage requestMessage) {
-
         if (LOGGER.isInfoEnabled()) {
-            LOGGER.info(
-                    "register RM sucesss. server version:" + ((RegisterRMResponse)response).getVersion()
-                            + ",channel:" + channel);
+            LOGGER.info("register RM success, server version:" + ((RegisterRMResponse) response).getVersion()
+                    + ", channel:" + channel);
         }
-        if (customerKeys == null) {
-            synchronized (channels) {
-                channels.put(serverAddress, channel);
-            }
-            String dbKey = getMergedResourceKeys(resourceManager);
-            RegisterRMRequest message = (RegisterRMRequest)requestMessage;
-            if (message.getResourceIds() != null) {
-                if (!message.getResourceIds().equals(dbKey)) {
-                    sendRegisterMessage(serverAddress, channel, dbKey);
-                }
-            }
-        }
+        channels.put(serverAddress, channel);
     }
 
-    /**
-     * Gets merged resource keys.
-     *
-     * @param resourceManager the resource manager
-     * @return the merged resource keys
-     */
+    @Override
+    public void onRegisterMsgFail(String serverAddress, Channel channel, Object response,
+                                  AbstractMessage requestMessage) {
+        if (response instanceof RegisterRMResponse && LOGGER.isInfoEnabled()) {
+            LOGGER.info("register RM failed, server version:" + ((RegisterRMResponse) response).getVersion());
+        }
+        throw new FrameworkException("register RM failed.");
+    }
+
+    /** 汇总 ResourceManager 当前管理的全部 resourceId，用逗号拼接 */
     public String getMergedResourceKeys(ResourceManager resourceManager) {
         Map<String, Resource> managedResources = resourceManager.getManagedResources();
         Set<String> resourceIds = managedResources.keySet();
@@ -482,29 +187,5 @@ public class RmRpcClient extends AbstractRpcRemotingClient {
             return sb.toString();
         }
         return null;
-    }
-
-    @Override
-    public void onRegisterMsgFail(String serverAddress, Channel channel, Object response,
-                                  AbstractMessage requestMessage) {
-
-        if (response instanceof RegisterRMResponse && LOGGER.isInfoEnabled()) {
-            LOGGER.info(
-                    "register RM failed. server version:" + ((RegisterRMResponse)response).getVersion());
-        }
-        throw new FrameworkException("register RM failed.");
-    }
-
-    @Override
-    public void destroyChannel(String serverAddress, Channel channel) {
-        if (null == channel) { return; }
-        try {
-            if (channel.equals(channels.get(serverAddress))) {
-                channels.remove(serverAddress);
-            }
-            nettyClientKeyPool.returnObject(poolKeyMap.get(serverAddress), channel);
-        } catch (Exception exx) {
-            LOGGER.error("return channel to rmPool error:" + exx.getMessage());
-        }
     }
 }

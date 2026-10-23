@@ -84,10 +84,14 @@ public class InsertExecutor<T, S extends Statement> extends AbstractDMLBaseExecu
                     throw e;
                 }
             }
-            List<Object> pkValues = new ArrayList<>();
-            while (genKeys.next()) {
-                Object v = genKeys.getObject(1);
-                pkValues.add(v);
+            List<Object> pkValues = new ArrayList<Object>();
+            try {
+                while (genKeys.next()) {
+                    Object v = genKeys.getObject(1);
+                    pkValues.add(v);
+                }
+            } finally {
+                genKeys.close();
             }
 
             afterImage = getTableRecords(pkValues);

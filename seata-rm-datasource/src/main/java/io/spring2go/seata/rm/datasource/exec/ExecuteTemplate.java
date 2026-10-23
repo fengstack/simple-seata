@@ -51,18 +51,13 @@ public class ExecuteTemplate {
                 executor = new PlainExecutor<T, S>(statementProxy, statementCallback, sqlRecognizer);
                 break;
         }
-        T rs = null;
         try {
-            rs = executor.execute(args);
-
+            return executor.execute(args);
+        } catch (SQLException ex) {
+            throw ex;
         } catch (Throwable ex) {
-            if (ex instanceof SQLException) {
-                throw (SQLException) ex;
-            } else {
-                // Turn everything into SQLException
-                new SQLException(ex);
-            }
+            // 其余异常（SQL 解析失败、镜像构建失败等）统一转成 SQLException 上抛，绝不能吞掉
+            throw new SQLException(ex);
         }
-        return rs;
     }
 }

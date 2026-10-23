@@ -37,22 +37,13 @@ public class ConnectionProxy extends AbstractConnectionProxy {
     }
 
     public void checkLock(TableRecords records) throws SQLException {
-        // Just check lock without requiring lock by now.
+        // SELECT FOR UPDATE 场景：只探测全局锁是否可获取，不真正注册分支
         String lockKeys = buildLockKey(records);
         try {
             boolean lockable = DataSourceManager.get().lockQuery(BranchType.AT, getDataSourceProxy().getResourceId(), context.getXid(), lockKeys);
             if (!lockable) {
                 throw new LockConflictException();
             }
-        } catch (TransactionException e) {
-            recognizeLockKeyConflictException(e);
-        }
-    }
-    public void register(TableRecords records) throws SQLException {
-        // Just check lock without requiring lock by now.
-        String lockKeys = buildLockKey(records);
-        try {
-            DataSourceManager.get().branchRegister(BranchType.AT, getDataSourceProxy().getResourceId(), null, context.getXid(), lockKeys);
         } catch (TransactionException e) {
             recognizeLockKeyConflictException(e);
         }

@@ -178,7 +178,7 @@ TM 侧业务全部成功后 `tx.commit()` →
 [DefaultCoordinator.handle(GlobalCommitRequest)](../seata-server/src/main/java/io/spring2go/seata/server/coordinator/DefaultCoordinator.java)
 遍历所有分支，向 RM 发 `BranchCommitRequest`。
 
-RM 收到后（[RMHandlerAT.doBranchCommit](../seata-rm-datasource/src/main/java/io/spring2go/seata/rm/RMHandlerAT.java)
+RM 收到后（[RMHandlerAT.handle(BranchCommitRequest)](../seata-rm-datasource/src/main/java/io/spring2go/seata/rm/RMHandlerAT.java)
 → [AsyncWorker](../seata-rm-datasource/src/main/java/io/spring2go/seata/rm/datasource/AsyncWorker.java)）：
 **什么都不改**，只是把 (xid, branchId) 塞进内存队列，立即返回成功。
 后台线程每秒批量 `DELETE FROM undo_log WHERE ...`。
@@ -195,7 +195,7 @@ TM 侧任何异常 → `tx.rollback()` → TC **按分支注册的逆序**逐个
 
 RM 侧链路（三个类，建议按此顺序读）：
 
-1. [RMHandlerAT.doBranchRollback](../seata-rm-datasource/src/main/java/io/spring2go/seata/rm/RMHandlerAT.java)
+1. [RMHandlerAT.handle(BranchRollbackRequest)](../seata-rm-datasource/src/main/java/io/spring2go/seata/rm/RMHandlerAT.java)
    —— 接指令，按 resourceId 找到对应的 DataSourceProxy。
 2. [UndoLogManager.undo()](../seata-rm-datasource/src/main/java/io/spring2go/seata/rm/datasource/undo/UndoLogManager.java)
    —— 开一个新本地事务：`SELECT ... FROM undo_log ... FOR UPDATE` 读出 JSON 反序列化，

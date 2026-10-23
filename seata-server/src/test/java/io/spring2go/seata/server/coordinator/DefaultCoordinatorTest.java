@@ -193,6 +193,90 @@ public class DefaultCoordinatorTest {
     }
 
     /**
+     * 场景：RM 在二阶段提交时不可达（对称于回滚失败场景）。
+     * TC 不能宣布提交成功——会话留在 CommitRetrying 状态由 timeoutCheck 重试，
+     * RM 恢复并异步清理完成后，会话删除、锁释放。
+     */
+    @Test
+    public void testCommitFailureKeepsSessionForRetry() {
+        FlakyCommitSender sender = new FlakyCommitSender(); // 第 1 次派发提交指令直接抛异常，模拟 RM 掉线
+        DefaultCoordinator flakyCoordinator = new DefaultCoordinator(sessionManager, lockManager, sender);
+
+        RpcContext rpcContext = new RpcContext();
+        rpcContext.setApplicationId("app-order");
+
+        GlobalBeginRequest beginRequest = new GlobalBeginRequest();
+        beginRequest.setTransactionName("orderTx");
+        beginRequest.setTimeout(60000);
+        long txId = XID.getTransactionId(flakyCoordinator.handle(beginRequest, rpcContext).getXid());
+
+        BranchRegisterRequest branchRequest = new BranchRegisterRequest();
+        branchRequest.setTransactionId(txId);
+        branchRequest.setBranchType(BranchType.AT);
+        branchRequest.setResourceId("db_order");
+        branchRequest.setLockKey("t_order:5001");
+        flakyCoordinator.handle(branchRequest, rpcContext);
+
+        // 提交：RM 掉线 → 失败。会话必须保留，锁不能释放
+        GlobalCommitRequest commitRequest = new GlobalCommitRequest();
+        commitRequest.setTransactionId(txId);
+        GlobalCommitResponse commitResponse = flakyCoordinator.handle(commitRequest, rpcContext);
+        Assert.assertEquals(GlobalStatus.CommitRetrying, commitResponse.getGlobalStatus());
+        Assert.assertNotNull(sessionManager.findGlobalSession(txId));
+        Assert.assertFalse(lockManager.isLockable(777777L, "db_order", "t_order:5001"));
+
+        // timeoutCheck 重试：RM 还是没恢复 → 依然保留
+        flakyCoordinator.timeoutCheck();
+        Assert.assertNotNull(sessionManager.findGlobalSession(txId));
+
+        // RM 恢复 → timeoutCheck 重试成功：会话删除、锁释放
+        sender.recovered = true;
+        flakyCoordinator.timeoutCheck();
+        Assert.assertNull(sessionManager.findGlobalSession(txId));
+        Assert.assertTrue(lockManager.isLockable(777777L, "db_order", "t_order:5001"));
+        Assert.assertEquals(1, sender.commitRequests.size());
+    }
+
+    /**
+     * 可控的假 sender：recovered=false 时模拟 RM 掉线（抛异常），
+     * 恢复后返回"提交成功"。用于验证 TC 的提交失败重试逻辑。
+     */
+    private static class FlakyCommitSender implements ServerMessageSender {
+        volatile boolean recovered = false;
+        final List<BranchCommitRequest> commitRequests = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void sendRequest(String resourceId, String clientIP, String applicationId, Object request) {
+        }
+
+        @Override
+        public void sendResponse(long msgId, String dbKey, String clientIp, String clientAppName, Object msg) {
+        }
+
+        @Override
+        public void sendResponse(long msgId, Channel channel, Object msg) {
+        }
+
+        @Override
+        public Object sendSynRequest(String dbKey, String clientIp, String clientAppName, Object msg, long timeout) {
+            if (!recovered) {
+                throw new RuntimeException("simulate RM down");
+            }
+            if (msg instanceof BranchCommitRequest) {
+                commitRequests.add((BranchCommitRequest) msg);
+            }
+            BranchCommitResponse response = new BranchCommitResponse();
+            response.setBranchStatus(BranchStatus.PhaseTwo_Committed);
+            return response;
+        }
+
+        @Override
+        public Object sendSynRequest(String dbKey, String clientIp, String clientAppName, Object msg) {
+            return sendSynRequest(dbKey, clientIp, clientAppName, msg, 0);
+        }
+    }
+
+    /**
      * 可控的假 sender：recovered=false 时模拟 RM 掉线（抛异常），
      * 恢复后返回"回滚成功"。用于验证 TC 的失败重试逻辑。
      */

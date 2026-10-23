@@ -3,342 +3,95 @@ package io.spring2go.seata.core.rpc;
 import io.netty.channel.Channel;
 import io.spring2go.seata.common.Constants;
 import io.spring2go.seata.core.rpc.netty.NettyPoolKey.TransactionRole;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.net.SocketAddress;
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 /**
- * Created by william on May, 2020
+ * 一条已完成注册握手的客户端连接的上下文：谁（角色/应用）、属于哪个事务分组、
+ * 持有哪些数据源资源（仅 RM）。由 {@link ChannelManager} 登记，随连接生命周期管理。
  */
 public class RpcContext {
-    private static final Logger LOGGER = LoggerFactory.getLogger(RpcContext.class);
 
     private TransactionRole clientRole;
-
     private String version;
-
     private String applicationId;
-
     private String transactionServiceGroup;
-
     private Channel channel;
+    private Set<String> resourceIds;
 
-    private Set<String> resourceSets;
-
-    /**
-     * id
-     */
-    private ConcurrentMap<Channel, RpcContext> clientIDHolderMap;
-
-    /**
-     * tm
-     */
-    private ConcurrentMap<Integer, RpcContext> clientTMHolderMap;
-
-    /**
-     * dbkeyRm
-     */
-    private ConcurrentMap<String, ConcurrentMap<Integer, RpcContext>> clientRMHolderMap;
-
-    /**
-     * Release.
-     */
-    public void release() {
-        Integer clientPort = getClientPortFromChannel(channel);
-        if (clientIDHolderMap != null) {
-            clientIDHolderMap = null;
-        }
-        if (clientRole == TransactionRole.TMROLE && clientTMHolderMap != null) {
-            clientTMHolderMap.remove(clientPort);
-            clientTMHolderMap = null;
-        }
-        if (clientRole == TransactionRole.RMROLE && clientRMHolderMap != null) {
-            for (Map<Integer, RpcContext> portMap : clientRMHolderMap.values()) {
-                portMap.remove(clientPort);
-            }
-            clientRMHolderMap = null;
-        }
-        if (null != resourceSets) {
-            resourceSets.clear();
-        }
-    }
-
-    /**
-     * Hold in client channels.
-     *
-     * @param clientTMHolderMap the client tm holder map
-     */
-    public void holdInClientChannels(ConcurrentMap<Integer, RpcContext> clientTMHolderMap) {
-        if (this.clientTMHolderMap != null) {
-            throw new IllegalStateException();
-        }
-        this.clientTMHolderMap = clientTMHolderMap;
-        Integer clientPort = getClientPortFromChannel(channel);
-        this.clientTMHolderMap.put(clientPort, this);
-    }
-
-    /**
-     * Hold in identified channels.
-     *
-     * @param clientIDHolderMap the client id holder map
-     */
-    public void holdInIdentifiedChannels(ConcurrentMap<Channel, RpcContext> clientIDHolderMap) {
-        if (this.clientIDHolderMap != null) {
-            throw new IllegalStateException();
-        }
-        this.clientIDHolderMap = clientIDHolderMap;
-        this.clientIDHolderMap.put(channel, this);
-    }
-
-    /**
-     * Hold in resource manager channels.
-     *
-     * @param resourceId the resource id
-     * @param portMap    the client rm holder map
-     */
-    public void holdInResourceManagerChannels(String resourceId, ConcurrentMap<Integer, RpcContext> portMap) {
-        if (null == this.clientRMHolderMap) {
-            this.clientRMHolderMap = new ConcurrentHashMap<String, ConcurrentMap<Integer, RpcContext>>();
-        }
-        Integer clientPort = getClientPortFromChannel(channel);
-        portMap.put(clientPort, this);
-        this.clientRMHolderMap.put(resourceId, portMap);
-    }
-
-    /**
-     * Hold in resource manager channels.
-     *
-     * @param resourceId the resource id
-     * @param clientPort the client port
-     */
-    public void holdInResourceManagerChannels(String resourceId, Integer clientPort) {
-        if (null == this.clientRMHolderMap) {
-            this.clientRMHolderMap = new ConcurrentHashMap<String, ConcurrentMap<Integer, RpcContext>>();
-        }
-        clientRMHolderMap.putIfAbsent(resourceId, new ConcurrentHashMap<Integer, RpcContext>());
-        ConcurrentMap<Integer, RpcContext> portMap = clientRMHolderMap.get(resourceId);
-        portMap.put(clientPort, this);
-    }
-
-    /**
-     * Gets get client rm holder map.
-     *
-     * @return the get client rm holder map
-     */
-    public ConcurrentMap<String, ConcurrentMap<Integer, RpcContext>> getClientRMHolderMap() {
-        return clientRMHolderMap;
-    }
-
-    /**
-     * Gets port map.
-     *
-     * @param resourceId the resource id
-     * @return the port map
-     */
-    public Map<Integer, RpcContext> getPortMap(String resourceId) {
-        return clientRMHolderMap.get(resourceId);
-    }
-
-    /**
-     * Gets get client id.
-     *
-     * @return the get client id
-     */
-    public String getClientId() {
-        return getClientIp();
-    }
-
-    /**
-     * Gets get channel.
-     *
-     * @return the get channel
-     */
     public Channel getChannel() {
         return channel;
     }
 
-    /**
-     * Sets set channel.
-     *
-     * @param channel the channel
-     */
     public void setChannel(Channel channel) {
         this.channel = channel;
     }
 
-    /**
-     * Gets get application id.
-     *
-     * @return the get application id
-     */
-    public String getApplicationId() {
-        return applicationId;
-    }
-
-    /**
-     * Sets set application id.
-     *
-     * @param applicationId the application id
-     */
-    public void setApplicationId(String applicationId) {
-        this.applicationId = applicationId;
-    }
-
-    /**
-     * Gets get transaction service group.
-     *
-     * @return the get transaction service group
-     */
-    public String getTransactionServiceGroup() {
-        return transactionServiceGroup;
-    }
-
-    /**
-     * Sets set transaction service group.
-     *
-     * @param transactionServiceGroup the transaction service group
-     */
-    public void setTransactionServiceGroup(String transactionServiceGroup) {
-        this.transactionServiceGroup = transactionServiceGroup;
-    }
-
-    /**
-     * Gets get client role.
-     *
-     * @return the get client role
-     */
     public TransactionRole getClientRole() {
         return clientRole;
     }
 
-    /**
-     * Sets set client role.
-     *
-     * @param clientRole the client role
-     */
     public void setClientRole(TransactionRole clientRole) {
         this.clientRole = clientRole;
     }
 
-    /**
-     * Gets get version.
-     *
-     * @return the get version
-     */
     public String getVersion() {
         return version;
     }
 
-    /**
-     * Sets set version.
-     *
-     * @param version the version
-     */
     public void setVersion(String version) {
         this.version = version;
     }
 
-    private static String getAddressFromChannel(Channel channel) {
-        SocketAddress socketAddress = channel.remoteAddress();
-        String address = socketAddress.toString();
-        if (socketAddress.toString().indexOf(Constants.ENDPOINT_BEGIN_CHAR) == 0) {
-            address = socketAddress.toString().substring(Constants.ENDPOINT_BEGIN_CHAR.length());
-        }
-        return address;
+    public String getApplicationId() {
+        return applicationId;
     }
 
-    /**
-     * Gets get client ip.
-     *
-     * @return the get client ip
-     */
+    public void setApplicationId(String applicationId) {
+        this.applicationId = applicationId;
+    }
+
+    public String getTransactionServiceGroup() {
+        return transactionServiceGroup;
+    }
+
+    public void setTransactionServiceGroup(String transactionServiceGroup) {
+        this.transactionServiceGroup = transactionServiceGroup;
+    }
+
+    public Set<String> getResourceIds() {
+        return resourceIds;
+    }
+
+    public void addResources(Set<String> resourceIds) {
+        if (resourceIds == null) {
+            return;
+        }
+        if (this.resourceIds == null) {
+            this.resourceIds = new HashSet<String>();
+        }
+        this.resourceIds.addAll(resourceIds);
+    }
+
+    /** 从连接远端地址解析客户端 IP（端口前的部分） */
     public String getClientIp() {
         if (channel == null) {
             return null;
         }
-        String address = getAddressFromChannel(channel);
-        String clientIp = address;
-        if (clientIp.contains(Constants.IP_PORT_SPLIT_CHAR)) {
-            clientIp = clientIp.substring(0, clientIp.lastIndexOf(Constants.IP_PORT_SPLIT_CHAR));
+        SocketAddress socketAddress = channel.remoteAddress();
+        String address = socketAddress.toString();
+        if (address.startsWith(Constants.ENDPOINT_BEGIN_CHAR)) {
+            address = address.substring(Constants.ENDPOINT_BEGIN_CHAR.length());
         }
-        return clientIp;
+        int splitIndex = address.lastIndexOf(Constants.IP_PORT_SPLIT_CHAR);
+        return splitIndex < 0 ? address : address.substring(0, splitIndex);
     }
 
-    private static Integer getClientPortFromChannel(Channel channel) {
-        String address = getAddressFromChannel(channel);
-        Integer port = 0;
-        try {
-            if (address.contains(Constants.IP_PORT_SPLIT_CHAR)) {
-                port = Integer.parseInt(address.substring(address.lastIndexOf(Constants.IP_PORT_SPLIT_CHAR) + 1));
-            }
-        } catch (NumberFormatException exx) {
-            LOGGER.error(exx.getMessage());
-        }
-        return port;
-    }
-
-    /**
-     * Gets get resource sets.
-     *
-     * @return the get resource sets
-     */
-    public Set<String> getResourceSets() {
-        return resourceSets;
-    }
-
-    /**
-     * Sets set resource sets.
-     *
-     * @param resourceSets the resource sets
-     */
-    public void setResourceSets(Set<String> resourceSets) {
-        this.resourceSets = resourceSets;
-    }
-
-    /**
-     * Add resource.
-     *
-     * @param resource the resource
-     */
-    public void addResource(String resource) {
-        if (null == resource) {
-            this.resourceSets = new HashSet<String>();
-        }
-        this.resourceSets.add(resource);
-    }
-
-    /**
-     * Add resources.
-     *
-     * @param resource the resource
-     */
-    public void addResources(Set<String> resource) {
-        if (null == resource) { return; }
-        if (null == resourceSets) {
-            this.resourceSets = new HashSet<String>();
-        }
-        this.resourceSets.addAll(resource);
-    }
-
-    /**
-     * To string string.
-     *
-     * @return the string
-     */
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("vgroup:" + transactionServiceGroup);
-        sb.append(",appname:" + applicationId);
-        sb.append(",channel:" + channel);
-        sb.append(",version:" + version);
-        sb.append(",type:" + clientRole.name());
-        return sb.toString();
+        return "vgroup:" + transactionServiceGroup + ",appname:" + applicationId
+                + ",channel:" + channel + ",version:" + version + ",type:" + clientRole;
     }
 }

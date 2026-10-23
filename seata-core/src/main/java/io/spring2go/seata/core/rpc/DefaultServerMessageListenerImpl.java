@@ -1,34 +1,29 @@
 package io.spring2go.seata.core.rpc;
 
 import io.netty.channel.ChannelHandlerContext;
-import io.spring2go.seata.common.thread.NamedThreadFactory;
 import io.spring2go.seata.common.util.NetUtil;
-import io.spring2go.seata.core.protocol.*;
+import io.spring2go.seata.core.protocol.AbstractMessage;
+import io.spring2go.seata.core.protocol.AbstractResultMessage;
+import io.spring2go.seata.core.protocol.HeartbeatMessage;
+import io.spring2go.seata.core.protocol.MergeResultMessage;
+import io.spring2go.seata.core.protocol.MergedWrapMessage;
+import io.spring2go.seata.core.protocol.RegisterRMRequest;
+import io.spring2go.seata.core.protocol.RegisterRMResponse;
+import io.spring2go.seata.core.protocol.RegisterTMRequest;
+import io.spring2go.seata.core.protocol.RegisterTMResponse;
 import io.spring2go.seata.core.rpc.netty.RegisterCheckAuthHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.concurrent.*;
-
 /**
- * Created by william on May, 2020
+ * TC 侧消息分发：注册握手、心跳应答、事务消息（含合并帧的拆包逐条处理）。
  */
 public class DefaultServerMessageListenerImpl implements ServerMessageListener {
     private static final Logger LOGGER = LoggerFactory.getLogger(DefaultServerMessageListenerImpl.class);
-    private static BlockingQueue<String> messageStrings = new LinkedBlockingQueue<String>();
+
     private ServerMessageSender serverMessageSender;
     private final TransactionMessageHandler transactionMessageHandler;
-    private static final int MAX_LOG_SEND_THREAD = 1;
-    private static final long KEEP_ALIVE_TIME = 0L;
-    private static final String THREAD_PREFIX = "batchLoggerPrint";
-    private static final long IDLE_CHECK_MILLS = 3L;
-    private static final String BATCH_LOG_SPLIT = "\n";
 
-    /**
-     * Instantiates a new Default server message listener.
-     *
-     * @param transactionMessageHandler the transaction message handler
-     */
     public DefaultServerMessageListenerImpl(TransactionMessageHandler transactionMessageHandler) {
         this.transactionMessageHandler = transactionMessageHandler;
     }
@@ -37,75 +32,62 @@ public class DefaultServerMessageListenerImpl implements ServerMessageListener {
     public void onTrxMessage(long msgId, ChannelHandlerContext ctx, Object message, ServerMessageSender sender) {
         RpcContext rpcContext = ChannelManager.getContextFromIdentified(ctx.channel());
         if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug(
-                    "server received:" + message + ",clientIp:" + NetUtil.toIpAddress(ctx.channel().remoteAddress())
-                            + ",vgroup:" + rpcContext.getTransactionServiceGroup());
-        } else {
-            messageStrings.offer(
-                    message + ",clientIp:" + NetUtil.toIpAddress(ctx.channel().remoteAddress()) + ",vgroup:" + rpcContext
-                            .getTransactionServiceGroup());
+            LOGGER.debug("server received:" + message + ",clientIp:" + NetUtil.toIpAddress(ctx.channel().remoteAddress())
+                    + ",vgroup:" + (rpcContext == null ? null : rpcContext.getTransactionServiceGroup()));
         }
-        if (!(message instanceof AbstractMessage)) { return; }
+        if (!(message instanceof AbstractMessage)) {
+            return;
+        }
         if (message instanceof MergedWrapMessage) {
-            AbstractResultMessage[] results = new AbstractResultMessage[((MergedWrapMessage)message).msgs.size()];
+            // 客户端把多条请求合并成一帧发来：逐条交给协调器处理，再把结果合并成一帧回去
+            AbstractResultMessage[] results = new AbstractResultMessage[((MergedWrapMessage) message).msgs.size()];
             for (int i = 0; i < results.length; i++) {
-                final AbstractMessage subMessage = ((MergedWrapMessage)message).msgs.get(i);
+                final AbstractMessage subMessage = ((MergedWrapMessage) message).msgs.get(i);
                 results[i] = transactionMessageHandler.onRequest(subMessage, rpcContext);
             }
             MergeResultMessage resultMessage = new MergeResultMessage();
             resultMessage.setMsgs(results);
             sender.sendResponse(msgId, ctx.channel(), resultMessage);
         } else if (message instanceof AbstractResultMessage) {
-            transactionMessageHandler.onResponse((AbstractResultMessage)message, rpcContext);
+            // RM 对二阶段指令的响应
+            transactionMessageHandler.onResponse((AbstractResultMessage) message, rpcContext);
         }
     }
 
     @Override
     public void onRegRmMessage(long msgId, ChannelHandlerContext ctx, RegisterRMRequest message,
                                ServerMessageSender sender, RegisterCheckAuthHandler checkAuthHandler) {
-
         boolean isSuccess = false;
         try {
-            if (null == checkAuthHandler || null != checkAuthHandler && checkAuthHandler.regResourceManagerChecKAuth(
-                    message)) {
+            if (null == checkAuthHandler || checkAuthHandler.regResourceManagerChecKAuth(message)) {
                 ChannelManager.registerRMChannel(message, ctx.channel());
-                Version.putChannelVersion(ctx.channel(), message.getVersion());
                 isSuccess = true;
             }
         } catch (Exception exx) {
-            isSuccess = false;
             LOGGER.error(exx.getMessage());
         }
         sender.sendResponse(msgId, ctx.channel(), new RegisterRMResponse(isSuccess));
         if (LOGGER.isInfoEnabled()) {
-            LOGGER.info("rm register success,message:" + message + ",channel:" + ctx.channel());
+            LOGGER.info("rm register {}, message:{}, channel:{}", isSuccess ? "success" : "failed", message, ctx.channel());
         }
     }
 
     @Override
     public void onRegTmMessage(long msgId, ChannelHandlerContext ctx, RegisterTMRequest message,
                                ServerMessageSender sender, RegisterCheckAuthHandler checkAuthHandler) {
-        String ipAndPort = NetUtil.toStringAddress(ctx.channel().remoteAddress());
-        Version.putChannelVersion(ctx.channel(), message.getVersion());
         boolean isSuccess = false;
         try {
-            if (null == checkAuthHandler || null != checkAuthHandler && checkAuthHandler.regTransactionManagerCheckAuth(
-                    message)) {
+            if (null == checkAuthHandler || checkAuthHandler.regTransactionManagerCheckAuth(message)) {
                 ChannelManager.registerTMChannel(message, ctx.channel());
-                Version.putChannelVersion(ctx.channel(), message.getVersion());
                 isSuccess = true;
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info(String
-                            .format("checkAuth for client:%s vgroup:%s ok", ipAndPort,
-                                    message.getTransactionServiceGroup()));
-                }
             }
         } catch (Exception exx) {
-            isSuccess = false;
             LOGGER.error(exx.getMessage());
         }
-        sender.sendResponse(msgId, ctx.channel(),
-                new RegisterTMResponse(isSuccess));
+        sender.sendResponse(msgId, ctx.channel(), new RegisterTMResponse(isSuccess));
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("tm register {}, message:{}, channel:{}", isSuccess ? "success" : "failed", message, ctx.channel());
+        }
     }
 
     @Override
@@ -116,61 +98,15 @@ public class DefaultServerMessageListenerImpl implements ServerMessageListener {
             LOGGER.error("", "send response error", throwable);
         }
         if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("received PING from " + ctx.channel().remoteAddress());
+            LOGGER.debug("received PING from {}", ctx.channel().remoteAddress());
         }
     }
 
-    /**
-     * Init.
-     */
-    public void init() {
-        ExecutorService mergeSendExecutorService = new ThreadPoolExecutor(MAX_LOG_SEND_THREAD, MAX_LOG_SEND_THREAD,
-                KEEP_ALIVE_TIME, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(),
-                new NamedThreadFactory(THREAD_PREFIX, MAX_LOG_SEND_THREAD, true));
-        mergeSendExecutorService.submit(new BatchLogRunnable());
-    }
-
-    /**
-     * Gets server message sender.
-     *
-     * @return the server message sender
-     */
     public ServerMessageSender getServerMessageSender() {
         return serverMessageSender;
     }
 
-    /**
-     * Sets server message sender.
-     *
-     * @param serverMessageSender the server message sender
-     */
     public void setServerMessageSender(ServerMessageSender serverMessageSender) {
         this.serverMessageSender = serverMessageSender;
-    }
-
-    /**
-     * The type Batch log runnable.
-     */
-    class BatchLogRunnable implements Runnable {
-
-        @Override
-        public void run() {
-            while (true) {
-                if (messageStrings.size() > 0) {
-                    StringBuilder builder = new StringBuilder();
-                    while (!messageStrings.isEmpty()) {
-                        builder.append(messageStrings.poll()).append(BATCH_LOG_SPLIT);
-                    }
-                    if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info(builder.toString());
-                    }
-                }
-                try {
-                    Thread.sleep(IDLE_CHECK_MILLS);
-                } catch (InterruptedException exx) {
-                    LOGGER.error(exx.getMessage());
-                }
-            }
-        }
     }
 }

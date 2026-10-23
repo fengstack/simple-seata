@@ -62,18 +62,11 @@ public class UndoLogManager {
             pst.setString(2, xid);
             pst.setBlob(3, BlobUtils.string2blob(undoLogContent));
             pst.executeUpdate();
-        } catch (Exception e) {
-            if (e instanceof SQLException) {
-                throw (SQLException) e;
-            } else {
-                throw new SQLException(e);
-            }
         } finally {
             if (pst != null) {
                 pst.close();
             }
         }
-
     }
 
     private static void assertDbSupport(String dbType) {

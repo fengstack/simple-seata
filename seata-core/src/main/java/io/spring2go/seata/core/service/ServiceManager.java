@@ -1,29 +1,11 @@
 package io.spring2go.seata.core.service;
 
 /**
- * Created by william on May, 2020
+ * 按事务分组查找 TC 集群地址。教学实现直接读本地配置
+ * （service.vgroup_mapping.<group> -> rgroup, service.<rgroup>.grouplist），
+ * 不接入注册中心。
  */
 public interface ServiceManager {
-    /**
-     * Register address to txServiceGroup server list.
-     * @param txServiceGroup transaction service group (service name)
-     * @param address server node address
-     */
-    void register(String txServiceGroup, String address);
-
-    /**
-     * Unregister address to txServiceGroup server list.
-     * @param txServiceGroup transaction service group (service name)
-     * @param address server node address
-     */
-    void unregister(String txServiceGroup, String address);
-
-    /**
-     * Watch service addresses for the give txServiceGroup
-     * @param txServiceGroup transaction service group (service name)
-     * @param watcher service address watcher
-     */
-    void watch(String txServiceGroup, AddressWatcher watcher);
 
     /**
      * Lookup server addresses for the given txServiceGroup

@@ -14,75 +14,60 @@ import java.nio.ByteBuffer;
 import java.util.List;
 
 /**
- * Created by william on May, 2020
+ * 0xdada 二进制协议编解码器。帧结构（14 字节定长头 + 变长体）：
+ *
+ *   magic(2) | flag(2) | type/length(2) | msgId(8) | body(...)
+ *
+ * flag 里的 FLAG_FESCAR_CODEC 区分"自定义编码的消息体"（全部业务消息）
+ * 与心跳帧（无消息体）。处理 TCP 半包/粘包：头没到齐、体没到齐都先攒着。
  */
 public class MessageCodecHandler extends ByteToMessageCodec<RpcMessage> {
     private static final Logger LOGGER = LoggerFactory.getLogger(MessageCodecHandler.class);
-    private static short MAGIC = (short)0xdada;
-    private static int HEAD_LENGHT = 14;
+    private static final short MAGIC = (short) 0xdada;
+    private static final int HEAD_LENGHT = 14;
     private static final int FLAG_REQUEST = 0x80;
     private static final int FLAG_ASYNC = 0x40;
     private static final int FLAG_HEARTBEAT = 0x20;
     private static final int FLAG_FESCAR_CODEC = 0x10;
-    private static final int MAGIC_HALF = -38;
+    private static final int MAGIC_HALF = -38; // (byte)0xda
     private static final int NOT_FOUND_INDEX = -1;
 
     @Override
     protected void encode(ChannelHandlerContext ctx, RpcMessage msg, ByteBuf out) throws Exception {
-        MessageCodec msgCodec = null;
-        ByteBuffer byteBuffer = ByteBuffer.allocate(128);
+        byte[] head = encodeHeader(msg);
+        out.writeBytes(head);
         if (msg.getBody() instanceof MessageCodec) {
-            msgCodec = (MessageCodec)msg.getBody();
+            // 消息体自带二进制编码
+            out.writeBytes(((MessageCodec) msg.getBody()).encode());
+        } else if (!(msg.getBody() instanceof HeartbeatMessage)) {
+            throw new IllegalArgumentException(
+                    "Unsupported message body (must be MessageCodec or HeartbeatMessage): " + msg.getBody());
         }
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("Send:" + msg.getBody());
+        }
+    }
+
+    /** 14 字节定长头：心跳帧没有消息体，其余帧先写头、体由调用方追加 */
+    private byte[] encodeHeader(RpcMessage msg) {
+        MessageCodec msgCodec = msg.getBody() instanceof MessageCodec ? (MessageCodec) msg.getBody() : null;
+        ByteBuffer byteBuffer = ByteBuffer.allocate(HEAD_LENGHT);
         byteBuffer.putShort(MAGIC);
         int flag = (msg.isAsync() ? FLAG_ASYNC : 0)
                 | (msg.isHeartbeat() ? FLAG_HEARTBEAT : 0)
                 | (msg.isRequest() ? FLAG_REQUEST : 0)
                 | (msgCodec != null ? FLAG_FESCAR_CODEC : 0);
-
-        byteBuffer.putShort((short)flag);
-
-        if (msg.getBody() instanceof HeartbeatMessage) {
-            byteBuffer.putShort((short)0);
-            byteBuffer.putLong(msg.getId());
-            byteBuffer.flip();
-            byte[] content = new byte[byteBuffer.limit()];
-            byteBuffer.get(content);
-            out.writeBytes(content);
-            return;
+        byteBuffer.putShort((short) flag);
+        if (msgCodec != null) {
+            byteBuffer.putShort(msgCodec.getTypeCode()); // type
+        } else {
+            byteBuffer.putShort((short) 0); // 心跳帧无消息体
         }
-
-        try {
-            if (null != msgCodec) {
-                byteBuffer.putShort(msgCodec.getTypeCode());
-                byteBuffer.putLong(msg.getId());
-
-                byteBuffer.flip();
-                byte[] content = new byte[byteBuffer.limit()];
-                byteBuffer.get(content);
-                out.writeBytes(content);
-                out.writeBytes(msgCodec.encode());
-            } else {
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("msg:" + msg.getBody().toString());
-                }
-                byte[] body = hessianSerialize(msg.getBody());
-                byteBuffer.putShort((short)body.length);
-                byteBuffer.putLong(msg.getId());
-                byteBuffer.put(body);
-
-                byteBuffer.flip();
-                byte[] content = new byte[byteBuffer.limit()];
-                byteBuffer.get(content);
-                out.writeBytes(content);
-            }
-        } catch (Exception e) {
-            LOGGER.error(msg.getBody() + " encode error", "", e);
-            throw e;
-        }
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Send:" + msg.getBody());
-        }
+        byteBuffer.putLong(msg.getId());
+        byteBuffer.flip();
+        byte[] content = new byte[byteBuffer.limit()];
+        byteBuffer.get(content);
+        return content;
     }
 
     @Override
@@ -116,7 +101,7 @@ public class MessageCodecHandler extends ByteToMessageCodec<RpcMessage> {
         ByteBuffer byteBuffer = ByteBuffer.wrap(buffer);
         short magic = byteBuffer.getShort();
         if (magic != MAGIC) {
-            LOGGER.error("decode error,will close channel:" + ctx.channel());
+            LOGGER.error("decode error, will close channel:" + ctx.channel());
             ctx.channel().close();
             return;
         }
@@ -125,31 +110,24 @@ public class MessageCodecHandler extends ByteToMessageCodec<RpcMessage> {
         boolean isHeartbeat = (FLAG_HEARTBEAT & flag) > 0;
         boolean isRequest = (FLAG_REQUEST & flag) > 0;
         boolean isFescarCodec = (FLAG_FESCAR_CODEC & flag) > 0;
-
-        short bodyLength = 0;
-        short typeCode = 0;
-        if (!isFescarCodec) { bodyLength = byteBuffer.getShort(); } else { typeCode = byteBuffer.getShort(); }
+        short typeCode = byteBuffer.getShort();
         long msgId = byteBuffer.getLong();
 
         if (isHeartbeat) {
             RpcMessage rpcMessage = new RpcMessage();
             rpcMessage.setId(msgId);
             rpcMessage.setAsync(true);
-            rpcMessage.setHeartbeat(isHeartbeat);
+            rpcMessage.setHeartbeat(true);
             rpcMessage.setRequest(isRequest);
-
-            if (isRequest) {
-                rpcMessage.setBody(HeartbeatMessage.PING);
-            } else {
-                rpcMessage.setBody(HeartbeatMessage.PONG);
-            }
-
+            rpcMessage.setBody(isRequest ? HeartbeatMessage.PING : HeartbeatMessage.PONG);
             out.add(rpcMessage);
             return;
         }
 
-        if (bodyLength > 0 && in.readableBytes() < bodyLength) {
-            in.readerIndex(begin);
+        if (!isFescarCodec) {
+            // 除了心跳帧，本协议只传输自定义编码的消息体
+            LOGGER.error("decode error (not a codec frame), will close channel:" + ctx.channel());
+            ctx.channel().close();
             return;
         }
 
@@ -159,77 +137,33 @@ public class MessageCodecHandler extends ByteToMessageCodec<RpcMessage> {
         rpcMessage.setHeartbeat(false);
         rpcMessage.setRequest(isRequest);
 
-        try {
-            if (isFescarCodec) {
-                MessageCodec msgCodec = AbstractMessage.getMsgInstanceByCode(typeCode);
-                if (!msgCodec.decode(in)) {
-                    LOGGER.error(msgCodec + " decode error.");
-                    in.readerIndex(begin);
-                    return;
-                }
-                rpcMessage.setBody(msgCodec);
-            } else {
-                byte[] body = new byte[bodyLength];
-                in.readBytes(body);
-                Object bodyObject = hessianDeserialize(body);
-                rpcMessage.setBody(bodyObject);
-            }
-        } catch (Exception e) {
-            LOGGER.error("decode error", "", e);
-            throw e;
+        MessageCodec msgCodec = AbstractMessage.getMsgInstanceByCode(typeCode);
+        if (msgCodec == null) {
+            LOGGER.error("unknown typeCode " + typeCode + ", will close channel:" + ctx.channel());
+            ctx.channel().close();
+            return;
         }
+        if (!msgCodec.decode(in)) {
+            // 消息体没到齐（半包）：回退读指针，等下一次数据
+            in.readerIndex(begin);
+            return;
+        }
+        rpcMessage.setBody(msgCodec);
         out.add(rpcMessage);
         if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("Receive:" + rpcMessage.getBody() + ",messageId:"
-                    + msgId);
+            LOGGER.debug("Receive:" + rpcMessage.getBody() + ",messageId:" + msgId);
         }
-
     }
 
-    /**
-     * Hessian serialize byte [ ].
-     *
-     * @param object the object
-     * @return the byte [ ]
-     * @throws Exception the exception
-     */
-    private static byte[] hessianSerialize(Object object) throws Exception {
-        if (object == null) {
-            throw new NullPointerException();
-        }
-        //todo user defined exx
-        throw new RuntimeException("hessianSerialize not support");
-
-    }
-
-    /**
-     * Hessian deserialize object.
-     *
-     * @param bytes the bytes
-     * @return the object
-     * @throws Exception the exception
-     */
-    private static Object hessianDeserialize(byte[] bytes) throws Exception {
-        if (bytes == null) {
-            throw new NullPointerException();
-        }
-        //todo user defined exx
-        throw new RuntimeException("hessianDeserialize not support");
-
-    }
-
+    /** 在字节流里向前搜索 magic（0xdada）的位置，找不到返回 -1 */
     private static int getMagicIndex(ByteBuf in) {
-        boolean found = false;
         int readIndex = in.readerIndex();
-        int begin = 0;
-        while (readIndex < in.writerIndex()) {
+        while (readIndex < in.writerIndex() - 1) {
             if (in.getByte(readIndex) == MAGIC_HALF && in.getByte(readIndex + 1) == MAGIC_HALF) {
-                begin = readIndex;
-                found = true;
-                break;
+                return readIndex;
             }
             ++readIndex;
         }
-        return found ? begin : NOT_FOUND_INDEX;
+        return NOT_FOUND_INDEX;
     }
 }

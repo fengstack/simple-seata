@@ -11,13 +11,10 @@ import io.spring2go.seata.core.protocol.RpcMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.lang.management.ManagementFactory;
 import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.concurrent.*;
 
 /**
@@ -301,11 +298,6 @@ public abstract class AbstractRpcRemoting extends ChannelDuplexHandler {
         }
     }
 
-    /**
-     * 用于测试。发现线程池满时可以打开这个变量，把堆栈打出来分享
-     */
-    boolean allowDumpStack = false;
-
     @Override
     public void channelRead(final ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof RpcMessage) {
@@ -328,17 +320,6 @@ public abstract class AbstractRpcRemoting extends ChannelDuplexHandler {
                 } catch (RejectedExecutionException e) {
                     LOGGER.error(FrameworkErrorCode.ThreadPoolFull.errCode,
                             "thread pool is full, current max pool size is " + messageExecutor.getActiveCount());
-                    if (allowDumpStack) {
-                        String name = ManagementFactory.getRuntimeMXBean().getName();
-                        String pid = name.split("@")[0];
-                        int idx = new Random().nextInt(100);
-                        try {
-                            Runtime.getRuntime().exec("jstack " + pid + " >d:/" + idx + ".log");
-                        } catch (IOException exx) {
-                            LOGGER.error(exx.getMessage());
-                        }
-                        allowDumpStack = false;
-                    }
                 }
             } else {
                 MessageFuture messageFuture = futures.remove(rpcMessage.getId());

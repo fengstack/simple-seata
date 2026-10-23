@@ -1,7 +1,7 @@
 # Simple-Seata
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Java](https://img.shields.io/badge/Java-1.7%2B-orange.svg)](#技术栈与环境依赖)
+[![Java](https://img.shields.io/badge/Java-1.8%2B-orange.svg)](#技术栈与环境依赖)
 [![Netty](https://img.shields.io/badge/Netty-4.1.24.Final-green.svg)](https://netty.io/)
 [![Druid](https://img.shields.io/badge/Druid-1.1.12-brightgreen.svg)](https://github.com/alibaba/druid)
 
@@ -29,9 +29,8 @@
 - **高性能长连接 RPC 通信**：
   - 基于 Netty 4 的异步双向通信架构，包含 Client / Server 模型、心跳保活机制与连接池。
   - 自定义高效二进制协议帧（魔数 `0xdada`，14 字节定长报文头，高效拆包/封包与消息合并）。
-- **分布式事务上下文与 SPI 扩展**：
-  - `RootContext` + `ThreadLocal` 实现全局事务 ID（`XID`）跨调用链路与线程的解耦绑定。
-  - 仿照经典微内核设计的 `EnhancedServiceLoader`（SPI 机制），解耦组件装配。
+- **分布式事务上下文**：
+  - `RootContext` 直接基于 `ThreadLocal` 实现全局事务 ID（`XID`）在调用链路上的绑定与解绑，让每个 RM 都知道自己属于哪个全局事务。
 
 ---
 
@@ -72,14 +71,12 @@ simple-seata
 ```
 
 ### 1. `seata-common`：基础公共组件
-- **`EnhancedServiceLoader`**：微内核扩展加载器，类似于 Java 原生 SPI / Dubbo SPI，通过 `@LoadLevel` 注解按优先级动态加载实现类。
 - **`XID`**：全局唯一事务标识（格式：`ip:port:transactionId`），提供静态工具方法完成生成与反解析。
 - **`NamedThreadFactory`**：标准化守护线程与业务线程池创建，方便线上排查。
 - **异常定义**：`FrameworkException`、`FrameworkErrorCode`、`NotSupportYetException`。
 
 ### 2. `seata-config`：配置管理
-- **`Configuration`** / **`FileConfiguration`**：轻量级配置读取抽象，基于 `com.typesafe.config` 读取本地 `application.conf` 配置。
-- **`ConfigChangeListener`**：支持动态配置变更监听与异步通知（`ConfigFuture`）。
+- **`Configuration`** / **`FileConfiguration`**：轻量级只读配置抽象，基于 `com.typesafe.config` 同步读取本地 `application.conf`（事务分组 -> TC 地址、锁重试参数）。
 
 ### 3. `seata-core`：事务模型与 Netty RPC 通信
 - **事务模型与状态机**：
@@ -88,7 +85,7 @@ simple-seata
   - 分支状态 `BranchStatus` 与分支类型 `BranchType`（默认为 AT 模式）。
 - **事务上下文（Context）**：
   - `RootContext`：全局门面，通过 `bind(xid)`、`unbind()`、`getXID()` 提供对全局事务状态的操作。
-  - `ThreadLocalContextCore`：默认底层基于 `ThreadLocal` 维护当前执行线程绑定的全局 XID。
+  - `RootContext`：全局门面，通过 `bind(xid)`、`unbind()`、`getXID()` 提供对全局事务状态的操作，底层就是一个 `ThreadLocal`。
 - **Netty RPC 通信层**：
   - `RpcServer` / `AbstractRpcRemotingServer`：服务端网络接收容器。
   - `TmRpcClient` / `RmRpcClient`：客户端通信管道，分别代表事务协调器客户端与资源管理器客户端。

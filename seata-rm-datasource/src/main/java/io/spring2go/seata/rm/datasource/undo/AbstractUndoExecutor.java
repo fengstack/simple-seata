@@ -27,15 +27,15 @@ public abstract class AbstractUndoExecutor {
     public void executeOn(Connection conn) throws SQLException {
         dataValidation(conn);
 
+        String undoSQL = buildUndoSQL();
+        PreparedStatement undoPST = null;
         try {
-            String undoSQL = buildUndoSQL();
-
-            PreparedStatement undoPST = conn.prepareStatement(undoSQL);
+            undoPST = conn.prepareStatement(undoSQL);
 
             TableRecords undoRows = getUndoRows();
 
             for (Row undoRow : undoRows.getRows()) {
-                ArrayList<Field> undoValues = new ArrayList<>();
+                ArrayList<Field> undoValues = new ArrayList<Field>();
                 Field pkValue = null;
                 for (Field field : undoRow.getFields()) {
                     if (field.getKeyType() == KeyType.PrimaryKey) {
@@ -49,16 +49,11 @@ public abstract class AbstractUndoExecutor {
 
                 undoPST.executeUpdate();
             }
-
-        } catch (Exception ex) {
-            if (ex instanceof SQLException) {
-                throw (SQLException) ex;
-            } else {
-                throw new SQLException(ex);
+        } finally {
+            if (undoPST != null) {
+                undoPST.close();
             }
-
         }
-
     }
 
     protected void undoPrepare(PreparedStatement undoPST, ArrayList<Field> undoValues, Field pkValue) throws SQLException {

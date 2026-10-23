@@ -13,7 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Created by william on May, 2020
+ * RM 侧消息监听：处理 TC 下发的二阶段分支指令，并把结果回给 TC。
  */
 public class RmMessageListener implements ClientMessageListener {
     private static final Logger LOGGER = LoggerFactory.getLogger(RmMessageListener.class);
@@ -24,11 +24,6 @@ public class RmMessageListener implements ClientMessageListener {
         this.handler = handler;
     }
 
-    /**
-     * Sets handler.
-     *
-     * @param handler the handler
-     */
     public void setHandler(TransactionMessageHandler handler) {
         this.handler = handler;
     }
@@ -39,17 +34,16 @@ public class RmMessageListener implements ClientMessageListener {
             LOGGER.info("onMessage:" + msg);
         }
         if (msg instanceof BranchCommitRequest) {
-            handleBranchCommit(msgId, serverAddress, (BranchCommitRequest)msg, sender);
+            handleBranchCommit(msgId, serverAddress, (BranchCommitRequest) msg, sender);
         } else if (msg instanceof BranchRollbackRequest) {
-            handleBranchRollback(msgId, serverAddress, (BranchRollbackRequest)msg, sender);
+            handleBranchRollback(msgId, serverAddress, (BranchRollbackRequest) msg, sender);
         }
     }
 
     private void handleBranchRollback(long msgId, String serverAddress,
-                                      BranchRollbackRequest branchRollbackRequest,
-                                      ClientMessageSender sender) {
-        BranchRollbackResponse resultMessage = null;
-        resultMessage = (BranchRollbackResponse)handler.onRequest(branchRollbackRequest, null);
+                                      BranchRollbackRequest branchRollbackRequest, ClientMessageSender sender) {
+        BranchRollbackResponse resultMessage =
+                (BranchRollbackResponse) handler.onRequest(branchRollbackRequest, null);
         if (LOGGER.isDebugEnabled()) {
             LOGGER.debug("branch rollback result:" + resultMessage);
         }
@@ -61,18 +55,21 @@ public class RmMessageListener implements ClientMessageListener {
     }
 
     private void handleBranchCommit(long msgId, String serverAddress,
-                                    BranchCommitRequest branchCommitRequest,
-                                    ClientMessageSender sender) {
-
-        BranchCommitResponse resultMessage = null;
+                                    BranchCommitRequest branchCommitRequest, ClientMessageSender sender) {
+        BranchCommitResponse resultMessage;
         try {
-            resultMessage = (BranchCommitResponse)handler.onRequest(branchCommitRequest, null);
-            sender.sendResponse(msgId, serverAddress, resultMessage);
+            resultMessage = (BranchCommitResponse) handler.onRequest(branchCommitRequest, null);
         } catch (Exception e) {
+            // handler 正常不会走到这里（内部已兜底），真到了说明流程错乱，也要回一个失败响应而不是中断
             LOGGER.error(FrameworkErrorCode.NetOnMessage.errCode, e.getMessage(), e);
+            resultMessage = new BranchCommitResponse();
             resultMessage.setResultCode(ResultCode.Failed);
             resultMessage.setMsg(e.getMessage());
+        }
+        try {
             sender.sendResponse(msgId, serverAddress, resultMessage);
+        } catch (Throwable throwable) {
+            LOGGER.error("", "send response error", throwable);
         }
     }
 }

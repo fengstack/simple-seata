@@ -316,21 +316,10 @@ public class RpcServer extends AbstractRpcRemotingServer implements ServerMessag
     }
 
     private void handleDisconnect(ChannelHandlerContext ctx) {
-        final String ipAndPort = NetUtil.toStringAddress(ctx.channel().remoteAddress());
-        RpcContext rpcContext = ChannelManager.getContextFromIdentified(ctx.channel());
         if (LOGGER.isInfoEnabled()) {
-            LOGGER.info(ipAndPort + " to server channel inactive.");
+            LOGGER.info(NetUtil.toStringAddress(ctx.channel().remoteAddress()) + " to server channel inactive.");
         }
-        if (null != rpcContext && null != rpcContext.getClientRole()) {
-            rpcContext.release();
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("remove channel:" + ctx.channel() + "context:" + rpcContext);
-            }
-        } else {
-            if (LOGGER.isInfoEnabled()) {
-                LOGGER.info("remove unuse channel:" + ctx.channel());
-            }
-        }
+        ChannelManager.releaseRpcContext(ctx.channel());
     }
 
     /**

@@ -1,10 +1,9 @@
 package io.spring2go.seata.core.rpc.netty;
 
-import com.alibaba.fastjson.JSON;
 import io.spring2go.seata.core.protocol.AbstractMessage;
 
 /**
- * Created by william on May, 2020
+ * 连接池 key：目标地址 + 客户端角色 + 建连时携带的注册报文。
  */
 public class NettyPoolKey {
     private TransactionRole transactionRole;
@@ -95,7 +94,7 @@ public class NettyPoolKey {
 
     @Override
     public String toString() {
-        return JSON.toJSONString(this);
+        return transactionRole + "@" + address + " message:" + message;
     }
 
     /**

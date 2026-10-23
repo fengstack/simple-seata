@@ -1,8 +1,12 @@
 package io.spring2go.seata.core.rpc.netty;
 
 import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.*;
-import io.netty.channel.epoll.EpollEventLoopGroup;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
+import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
@@ -16,7 +20,7 @@ import java.net.InetSocketAddress;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
- * Created by william on May, 2020
+ * TC 侧 Netty 接收容器：绑定端口、装配"空闲检测 + 协议编解码 + 业务分发"流水线。
  */
 public abstract class AbstractRpcRemotingServer extends AbstractRpcRemoting implements RemotingService {
     private static final Logger LOGGER = LoggerFactory.getLogger(AbstractRpcRemotingServer.class);
@@ -35,42 +39,19 @@ public abstract class AbstractRpcRemotingServer extends AbstractRpcRemoting impl
         return listenPort;
     }
 
-    /**
-     * Instantiates a new Rpc remoting server.
-     *
-     * @param nettyServerConfig the netty server config
-     */
-    public AbstractRpcRemotingServer(final NettyServerConfig nettyServerConfig) {
-        this(nettyServerConfig, null);
-    }
-
-    /**
-     * Instantiates a new Rpc remoting server.
-     *
-     * @param nettyServerConfig the netty server config
-     * @param messageExecutor   the message executor
-     * @param handlers          the handlers
-     */
-    public AbstractRpcRemotingServer(final NettyServerConfig nettyServerConfig,
-                                     final ThreadPoolExecutor messageExecutor, final ChannelHandler... handlers) {
+    public AbstractRpcRemotingServer(final NettyServerConfig nettyServerConfig, final ThreadPoolExecutor messageExecutor,
+                                     final ChannelHandler... handlers) {
         super(messageExecutor);
         this.serverBootstrap = new ServerBootstrap();
         this.nettyServerConfig = nettyServerConfig;
         this.eventLoopGroupBoss = new NioEventLoopGroup(nettyServerConfig.getBossThreadSize(),
                 new NamedThreadFactory(nettyServerConfig.getBossThreadPrefix(), nettyServerConfig.getBossThreadSize()));
-        if (NettyServerConfig.enableEpool()) {
-            this.eventLoopGroupWorker = new EpollEventLoopGroup(nettyServerConfig.getServerWorkerThreads(),
-                    new NamedThreadFactory(nettyServerConfig.getWorkerThreadPrefix(),
-                            nettyServerConfig.getServerWorkerThreads()));
-        } else {
-            this.eventLoopGroupWorker = new NioEventLoopGroup(nettyServerConfig.getServerWorkerThreads(),
-                    new NamedThreadFactory(nettyServerConfig.getWorkerThreadPrefix(),
-                            nettyServerConfig.getServerWorkerThreads()));
-        }
-        if (null != handlers) {
+        this.eventLoopGroupWorker = new NioEventLoopGroup(nettyServerConfig.getServerWorkerThreads(),
+                new NamedThreadFactory(nettyServerConfig.getWorkerThreadPrefix(),
+                        nettyServerConfig.getServerWorkerThreads()));
+        if (null != handlers && handlers.length > 0) {
             channelHandlers = handlers;
         }
-
     }
 
     @Override
@@ -92,7 +73,8 @@ public abstract class AbstractRpcRemotingServer extends AbstractRpcRemoting impl
                 .childOption(ChannelOption.SO_RCVBUF, nettyServerConfig.getServerSocketResvBufSize())
                 .childOption(ChannelOption.WRITE_BUFFER_HIGH_WATER_MARK,
                         nettyServerConfig.getWriteBufferHighWaterMark())
-                .childOption(ChannelOption.WRITE_BUFFER_LOW_WATER_MARK, nettyServerConfig.getWriteBufferLowWaterMark())
+                .childOption(ChannelOption.WRITE_BUFFER_LOW_WATER_MARK,
+                        nettyServerConfig.getWriteBufferLowWaterMark())
                 .localAddress(new InetSocketAddress(listenPort))
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
@@ -102,23 +84,18 @@ public abstract class AbstractRpcRemotingServer extends AbstractRpcRemoting impl
                         if (null != channelHandlers) {
                             addChannelPipelineLast(ch, channelHandlers);
                         }
-
                     }
                 });
 
-        if (nettyServerConfig.isEnableServerPooledByteBufAllocator()) {
-            this.serverBootstrap.childOption(ChannelOption.ALLOCATOR, NettyServerConfig.DIRECT_BYTE_BUF_ALLOCATOR);
-        }
-
         try {
-            LOGGER.info("Server starting ... ");
+            LOGGER.info("Server starting on port " + listenPort + " ...");
             ChannelFuture future = this.serverBootstrap.bind(listenPort).sync();
             LOGGER.info("Server started ... ");
+            // 阻塞直到服务端 Channel 关闭（独立进程模式下让 main 线程驻留）
             future.channel().closeFuture().sync();
         } catch (InterruptedException exx) {
             throw new RuntimeException(exx);
         }
-
     }
 
     @Override

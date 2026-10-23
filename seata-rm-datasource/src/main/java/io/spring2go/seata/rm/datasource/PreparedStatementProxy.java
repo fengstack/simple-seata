@@ -17,17 +17,8 @@ public class PreparedStatementProxy extends AbstractPreparedStatementProxy imple
         return parameters;
     }
 
-    private void init() throws SQLException {
-        int paramCount = targetStatement.getParameterMetaData().getParameterCount();
-        this.parameters = new ArrayList[paramCount];
-        for (int i = 0; i < paramCount; i++) {
-            parameters[i] = new ArrayList<>();
-        }
-    }
-
     public PreparedStatementProxy(AbstractConnectionProxy connectionProxy, PreparedStatement targetStatement, String targetSQL) throws SQLException {
         super(connectionProxy, targetStatement, targetSQL);
-        init();
     }
 
     @Override

@@ -1,7 +1,6 @@
 package io.spring2go.seata.core.service;
 
 import io.spring2go.seata.common.exception.FrameworkException;
-import io.spring2go.seata.common.exception.NotSupportYetException;
 import io.spring2go.seata.common.util.StringUtils;
 import io.spring2go.seata.config.Configuration;
 import io.spring2go.seata.config.ConfigurationFactory;
@@ -10,50 +9,34 @@ import static io.spring2go.seata.common.exception.FrameworkErrorCode.InvalidConf
 import static io.spring2go.seata.core.service.ConfigurationKeys.SERVER_NODE_SPLIT_CHAR;
 
 /**
- * Created by william on May, 2020
+ * 从 application.conf 读取分组 -> TC 地址列表的映射，结果只查一次。
  */
 public class ServiceManagerStaticConfigImpl implements ServiceManager {
-    private Configuration configuration = ConfigurationFactory.getInstance();
+    private final Configuration configuration = ConfigurationFactory.getInstance();
 
-    @Override
-    public void register(String txServiceGroup, String address) {
-        throw new NotSupportYetException("Dynamic registry");
-
-    }
-
-    @Override
-    public void unregister(String txServiceGroup, String address) {
-        throw new NotSupportYetException("Dynamic un-registry");
-
-    }
-
-    @Override
-    public void watch(String txServiceGroup, AddressWatcher watcher) {
-        throw new NotSupportYetException("Watch");
-
-    }
-
-    private String[] serverAddresses = null;
+    private volatile String[] serverAddresses;
 
     @Override
     public String[] lookup(String txServiceGroup) {
         if (serverAddresses != null) {
             return serverAddresses;
         }
-        String rGroup = configuration.getConfig(ConfigurationKeys.SERVICE_GROUP_MAPPING_PREFIX + txServiceGroup);
-        if (rGroup == null) {
-            throw new FrameworkException(InvalidConfiguration);
+        synchronized (this) {
+            if (serverAddresses != null) {
+                return serverAddresses;
+            }
+            // vgroup_mapping.my_test_tx_group = "default" -> default.grouplist = "127.0.0.1:8091"
+            String rGroup = configuration.getConfig(ConfigurationKeys.SERVICE_GROUP_MAPPING_PREFIX + txServiceGroup);
+            if (rGroup == null) {
+                throw new FrameworkException(InvalidConfiguration);
+            }
+            String serverListConfig = configuration.getConfig(
+                    ConfigurationKeys.SERVICE_PREFIX + rGroup + ConfigurationKeys.GROUPLIST_POSTFIX);
+            if (StringUtils.isEmpty(serverListConfig)) {
+                throw new FrameworkException(InvalidConfiguration);
+            }
+            serverAddresses = serverListConfig.split(SERVER_NODE_SPLIT_CHAR);
+            return serverAddresses;
         }
-        String rGroupDataId = ConfigurationKeys.SERVICE_PREFIX + rGroup + ConfigurationKeys.GROUPLIST_POSTFIX;
-        String serverListConfig = configuration.getConfig(rGroupDataId);
-        if (StringUtils.isEmpty(serverListConfig)) {
-            throw new FrameworkException(InvalidConfiguration);
-        }
-        serverAddresses = serverListConfig.split(SERVER_NODE_SPLIT_CHAR);
-        if (serverAddresses == null || serverAddresses.length == 0) {
-            throw new FrameworkException(InvalidConfiguration);
-        }
-        return serverAddresses;
-
     }
 }
