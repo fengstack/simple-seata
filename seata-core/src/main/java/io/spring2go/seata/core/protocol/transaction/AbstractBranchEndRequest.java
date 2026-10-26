@@ -114,43 +114,54 @@ public abstract class AbstractBranchEndRequest extends AbstractTransactionReques
 
     @Override
     public boolean decode(ByteBuf in) {
-        int leftLen = in.readableBytes();
-        int read = 0;
+        // 每个字段读取前先确认字节到齐；返回 false 时编解码器会回退读指针，
+        // 等剩余半包到达后对同一段字节重新解码（所以下面可以放心先读后判断）
+        if (in.readableBytes() < 2) {
+            return false;
+        }
+        // 1. xid
         int xidLen = in.readShort();
         if (xidLen > 0) {
-            if (leftLen < xidLen) {
+            if (in.readableBytes() < xidLen) {
                 return false;
             }
             byte[] bs = new byte[xidLen];
             in.readBytes(bs);
             setXid(new String(bs, UTF8));
-            leftLen -= xidLen;
+        }
+        // 2-3. branchId(8) + branchType(1)
+        if (in.readableBytes() < 8 + 1) {
+            return false;
         }
         this.branchId = in.readLong();
-        leftLen -= 8;
         this.branchType = BranchType.get(in.readByte());
-        leftLen --;
 
+        // 4. Resource Id
+        if (in.readableBytes() < 2) {
+            return false;
+        }
         int resourceIdLen = in.readShort();
         if (resourceIdLen > 0) {
-            if (leftLen < resourceIdLen) {
+            if (in.readableBytes() < resourceIdLen) {
                 return false;
             }
             byte[] bs = new byte[resourceIdLen];
             in.readBytes(bs);
             setResourceId(new String(bs, UTF8));
-            leftLen -= resourceIdLen;
         }
 
-        int applicationDataLen = in.readShort();
+        // 5. Application Data（长度是 int/4 字节，与 encode 的 putInt 对齐，不是 short）
+        if (in.readableBytes() < 4) {
+            return false;
+        }
+        int applicationDataLen = in.readInt();
         if (applicationDataLen > 0) {
-            if (leftLen < applicationDataLen) {
+            if (in.readableBytes() < applicationDataLen) {
                 return false;
             }
             byte[] bs = new byte[applicationDataLen];
             in.readBytes(bs);
             setApplicationData(new String(bs, UTF8));
-            leftLen -= applicationDataLen;
         }
 
         return true;

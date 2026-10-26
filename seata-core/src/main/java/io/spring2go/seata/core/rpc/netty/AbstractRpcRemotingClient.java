@@ -483,14 +483,18 @@ public abstract class AbstractRpcRemotingClient extends AbstractRpcRemoting
                     if (mergeMessage.msgIds.size() > 1 && LOGGER.isDebugEnabled()) {
                         LOGGER.debug("merge msg size:" + mergeMessage.msgIds.size());
                     }
-                    Channel sendChannel = connect(address);
+                    // connect 也必须包在 try 里：TC 不可达时它同样抛 FrameworkException，
+                    // 而这是唯一的合并发送线程，一旦异常逃出 while(true) 就再也没人发送了
+                    Channel sendChannel = null;
                     try {
+                        sendChannel = connect(address);
                         sendRequest(sendChannel, mergeMessage);
                     } catch (FrameworkException e) {
-                        if (e.getErrcode() == FrameworkErrorCode.ChannelIsNotWritable && address != null) {
+                        if (e.getErrcode() == FrameworkErrorCode.ChannelIsNotWritable
+                                && address != null && sendChannel != null) {
                             destroyChannel(address, sendChannel);
                         }
-                        LOGGER.error("", "client merge call failed", e);
+                        LOGGER.error("client merge call failed, address:" + address, e);
                     }
                 }
                 isSending = false;

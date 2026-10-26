@@ -25,14 +25,20 @@ public class MergedWrapMessage extends AbstractMessage implements Serializable, 
 
     @Override
     public byte[] encode() {
-        int bufferSize = msgs.size() * 1024;
+        // 先让每个子消息完成编码，再按实际长度之和分配缓冲：
+        // 固定按"条数*1024"分配时，任一子消息超过 1KB 就会 BufferOverflowException
+        byte[][] encoded = new byte[msgs.size()][];
+        int bufferSize = 2; // msgNum
+        for (int i = 0; i < msgs.size(); i++) {
+            encoded[i] = msgs.get(i).encode();
+            bufferSize += 2 + encoded[i].length; // typeCode + body
+        }
+
         ByteBuffer byteBuffer = ByteBuffer.allocate(bufferSize);
         byteBuffer.putShort((short) msgs.size());
-        for (AbstractMessage msg : msgs) {
-            //msg.setChannelHandlerContext(ctx);
-            byte[] data = msg.encode();
-            byteBuffer.putShort(msg.getTypeCode());
-            byteBuffer.put(data);
+        for (int i = 0; i < msgs.size(); i++) {
+            byteBuffer.putShort(msgs.get(i).getTypeCode());
+            byteBuffer.put(encoded[i]);
         }
 
         byteBuffer.flip();

@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.*;
+import java.util.List;
 
 import static io.spring2go.seata.core.exception.TransactionExceptionCode.BranchRollbackFailed_Retriable;
 
@@ -98,7 +99,12 @@ public class UndoLogManager {
                 String rollbackInfo = StringUtils.blob2string(b);
                 BranchUndoLog branchUndoLog = UndoLogParserFactory.getInstance().decode(rollbackInfo);
 
-                for (SQLUndoLog sqlUndoLog : branchUndoLog.getSqlUndoLogs()) {
+                // 补偿必须按执行顺序的逆序进行：同一行被本事务多次修改时，
+                // 只有先补偿"最后一次"修改，数据才会回到上一次修改完成时的样子（后镜像），
+                // 防脏写校验才不会误报。正序补偿会在第一次补偿时就撞上"数据不一致"
+                List<SQLUndoLog> sqlUndoLogs = branchUndoLog.getSqlUndoLogs();
+                for (int i = sqlUndoLogs.size() - 1; i >= 0; i--) {
+                    SQLUndoLog sqlUndoLog = sqlUndoLogs.get(i);
                     TableMeta tableMeta = TableMetaCache.getTableMeta(dataSourceProxy, sqlUndoLog.getTableName());
                     sqlUndoLog.setTableMeta(tableMeta);
                     AbstractUndoExecutor undoExecutor = UndoExecutorFactory.getUndoExecutor(dataSourceProxy.getDbType(), sqlUndoLog);

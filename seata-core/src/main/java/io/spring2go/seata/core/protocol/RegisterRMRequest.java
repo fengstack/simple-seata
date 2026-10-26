@@ -48,65 +48,69 @@ public class RegisterRMRequest extends AbstractIdentifyRequest implements Serial
 
     @Override
     public boolean decode(ByteBuf in) {
-        int i = in.readableBytes();
-        if (i < 1) {
+        // 每个字段读取前先确认字节到齐；返回 false 时编解码器会回退读指针，
+        // 等剩余半包到达后对同一段字节重新解码。漏掉任何一个检查，
+        // 半包时 readBytes 会抛 IndexOutOfBoundsException 直接杀掉整条连接
+        if (in.readableBytes() < 2) {
             return false;
         }
-
         short len = in.readShort();
         if (len > 0) {
-            if (i < len) {
+            if (in.readableBytes() < len) {
                 return false;
-            } else {
-                i -= len;
             }
             byte[] bs = new byte[len];
             in.readBytes(bs);
             this.setVersion(new String(bs, UTF8));
         }
 
+        if (in.readableBytes() < 2) {
+            return false;
+        }
         len = in.readShort();
         if (len > 0) {
-            if (i < len) {
+            if (in.readableBytes() < len) {
                 return false;
-            } else {
-                i -= len;
             }
             byte[] bs = new byte[len];
             in.readBytes(bs);
             this.setApplicationId(new String(bs, UTF8));
         }
 
+        if (in.readableBytes() < 2) {
+            return false;
+        }
         len = in.readShort();
         if (len > 0) {
-            if (i < len) {
+            if (in.readableBytes() < len) {
                 return false;
-            } else {
-                i -= len;
             }
             byte[] bs = new byte[len];
             in.readBytes(bs);
             this.setTransactionServiceGroup(new String(bs, UTF8));
         }
 
+        if (in.readableBytes() < 2) {
+            return false;
+        }
         len = in.readShort();
         if (len > 0) {
-            if (i < len) {
+            if (in.readableBytes() < len) {
                 return false;
-            } else {
-                i -= len;
             }
             byte[] bs = new byte[len];
             in.readBytes(bs);
             this.setExtraData(new String(bs, UTF8));
         }
 
+        // resourceIds 的长度是 int（与 encode 的 putInt 对齐）
+        if (in.readableBytes() < 4) {
+            return false;
+        }
         int iLen = in.readInt();
         if (iLen > 0) {
-            if (i < iLen) {
+            if (in.readableBytes() < iLen) {
                 return false;
-            } else {
-                i -= iLen;
             }
             byte[] bs = new byte[iLen];
             in.readBytes(bs);

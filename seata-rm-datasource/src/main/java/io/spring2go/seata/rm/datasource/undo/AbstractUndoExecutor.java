@@ -5,6 +5,7 @@ import io.spring2go.seata.rm.datasource.sql.struct.KeyType;
 import io.spring2go.seata.rm.datasource.sql.struct.Row;
 import io.spring2go.seata.rm.datasource.sql.struct.TableRecords;
 
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -156,13 +157,29 @@ public abstract class AbstractUndoExecutor {
         for (Field expectedField : expected.getFields()) {
             for (Field actualField : actual.getFields()) {
                 if (expectedField.getName().equals(actualField.getName())) {
-                    if (!Objects.equals(expectedField.getValue(), actualField.getValue())) {
+                    if (!fieldEquals(expectedField.getValue(), actualField.getValue())) {
                         return false;
                     }
                 }
             }
         }
         return true;
+    }
+
+    /**
+     * 带类型归一的字段值比较。后镜像来自 fastjson 反序列化（数值可能还原成
+     * Integer/Long/BigDecimal、日期还原成 java.util.Date），当前值来自 rs.getObject
+     * （BIGINT 是 Long、DATETIME 是 java.sql.Timestamp）。直接 Objects.equals 会把
+     * "同一个值、不同的类"误判成脏写，必须按数值大小/时间戳比较。
+     */
+    private boolean fieldEquals(Object expected, Object actual) {
+        if (expected instanceof Number && actual instanceof Number) {
+            return new BigDecimal(expected.toString()).compareTo(new BigDecimal(actual.toString())) == 0;
+        }
+        if (expected instanceof java.util.Date && actual instanceof java.util.Date) {
+            return ((java.util.Date) expected).getTime() == ((java.util.Date) actual).getTime();
+        }
+        return Objects.equals(expected, actual);
     }
 
     private String pkValueOf(Row row) {

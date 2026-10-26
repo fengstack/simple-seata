@@ -29,12 +29,20 @@ public class MergeResultMessage extends AbstractMessage implements MergeMessage{
 
     @Override
     public byte[] encode() {
-        ByteBuffer byteBuffer = ByteBuffer.allocate(msgs.length * 1024);
+        // 先让每个子消息完成编码，再按实际长度之和分配缓冲：
+        // 固定按"条数*1024"分配时，任一子消息超过 1KB 就会 BufferOverflowException
+        byte[][] encoded = new byte[msgs.length][];
+        int bufferSize = 2; // msgNum
+        for (int i = 0; i < msgs.length; i++) {
+            encoded[i] = msgs[i].encode();
+            bufferSize += 2 + encoded[i].length; // typeCode + body
+        }
+
+        ByteBuffer byteBuffer = ByteBuffer.allocate(bufferSize);
         byteBuffer.putShort((short)msgs.length);
-        for (AbstractMessage msg : msgs) {
-            byte[] data = msg.encode();
-            byteBuffer.putShort(msg.getTypeCode());
-            byteBuffer.put(data);
+        for (int i = 0; i < msgs.length; i++) {
+            byteBuffer.putShort(msgs[i].getTypeCode());
+            byteBuffer.put(encoded[i]);
         }
 
         byteBuffer.flip();

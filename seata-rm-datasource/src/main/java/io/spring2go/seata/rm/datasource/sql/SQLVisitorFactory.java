@@ -4,6 +4,8 @@ import com.alibaba.druid.sql.SQLUtils;
 import com.alibaba.druid.sql.ast.SQLStatement;
 import com.alibaba.druid.sql.ast.statement.SQLDeleteStatement;
 import com.alibaba.druid.sql.ast.statement.SQLInsertStatement;
+import com.alibaba.druid.sql.ast.statement.SQLSelectQuery;
+import com.alibaba.druid.sql.ast.statement.SQLSelectQueryBlock;
 import com.alibaba.druid.sql.ast.statement.SQLSelectStatement;
 import com.alibaba.druid.sql.ast.statement.SQLUpdateStatement;
 import com.alibaba.druid.util.JdbcConstants;
@@ -33,7 +35,13 @@ public class SQLVisitorFactory {
             } else if (ast instanceof SQLDeleteStatement) {
                 recognizer = new MySQLDeleteRecognizer(sql, ast);
             } else if (ast instanceof SQLSelectStatement) {
-                recognizer = new MySQLSelectForUpdateRecognizer(sql, ast);
+                // 只有 SELECT ... FOR UPDATE 才需要拦截（探测并申请全局锁）；
+                // 普通 SELECT 返回 null，由调用方直接走原生执行——
+                // AT 模式的一阶段里普通读不申请全局锁，加锁反而会造成无谓的冲突和死锁
+                SQLSelectQuery query = ((SQLSelectStatement) ast).getSelect().getQuery();
+                if (query instanceof SQLSelectQueryBlock && ((SQLSelectQueryBlock) query).isForUpdate()) {
+                    recognizer = new MySQLSelectForUpdateRecognizer(sql, ast);
+                }
             }
         } else {
             throw new UnsupportedOperationException("Just support MySQL by now!");

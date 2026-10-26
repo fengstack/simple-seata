@@ -11,7 +11,8 @@ public class BranchSession {
     private long branchId;
     private String resourceId;
     private BranchType branchType = BranchType.AT;
-    private BranchStatus status = BranchStatus.Unknown;
+    /** RPC 工作线程写、超时检查线程读，跨线程可见 */
+    private volatile BranchStatus status = BranchStatus.Unknown;
     private String clientId;
     private String clientIp;
     private String applicationData;

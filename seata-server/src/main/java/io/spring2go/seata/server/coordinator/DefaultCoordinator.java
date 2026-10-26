@@ -86,17 +86,28 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
                     request.getBranchType(), request.getLockKey(), clientId);
             branchSession.setClientIp(clientIp);
 
-            // 申请全局行锁
-            boolean lockAcquired = lockManager.acquireLock(branchSession);
-            if (!lockAcquired) {
-                response.setResultCode(ResultCode.Failed);
-                response.setTransactionExceptionCode(TransactionExceptionCode.LockKeyConflict);
-                response.setMsg("Global lock conflict on lockKey [" + request.getLockKey() + "]");
-                return response;
-            }
+            synchronized (session.getSessionLock()) {
+                // 只有还在一阶段（Begin）的事务能注册新分支：二阶段进行中注册的分支
+                // 既不会被提交/回滚，它申请到的全局锁也没人释放，行会被永久锁死
+                if (session.getStatus() != GlobalStatus.Begin) {
+                    response.setResultCode(ResultCode.Failed);
+                    response.setMsg("Global transaction [" + txId + "] is not in Begin phase (status="
+                            + session.getStatus() + "), reject branch register");
+                    return response;
+                }
 
-            branchSession.setStatus(BranchStatus.Registered);
-            session.add(branchSession);
+                // 申请全局行锁
+                boolean lockAcquired = lockManager.acquireLock(branchSession);
+                if (!lockAcquired) {
+                    response.setResultCode(ResultCode.Failed);
+                    response.setTransactionExceptionCode(TransactionExceptionCode.LockKeyConflict);
+                    response.setMsg("Global lock conflict on lockKey [" + request.getLockKey() + "]");
+                    return response;
+                }
+
+                branchSession.setStatus(BranchStatus.Registered);
+                session.add(branchSession);
+            }
 
             response.setTransactionId(txId);
             response.setBranchId(branchId);
@@ -201,17 +212,30 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
      * 会话保留在 CommitRetrying 状态，等 timeoutCheck() 线程重试。
      */
     private void completeCommit(GlobalSession session) {
-        session.changeStatus(GlobalStatus.Committing);
-        boolean allBranchesDone = dispatchBranchCommit(session);
+        synchronized (session.getSessionLock()) {
+            // 状态机校验：只允许一阶段（Begin）、上次没做完（CommitRetrying）以及
+            // 中断在半路的 Committing 进入提交流程。会话已走上回滚链路时
+            // （比如超时已被自动回滚），迟到的 commit 必须拒绝——否则同一事务的
+            // 分支会一半提交一半回滚，直接破坏数据
+            GlobalStatus status = session.getStatus();
+            if (status != GlobalStatus.Begin && status != GlobalStatus.Committing
+                    && status != GlobalStatus.CommitRetrying) {
+                LOGGER.error("Global transaction [" + session.getXid() + "] is in status [" + status
+                        + "], reject commit");
+                return;
+            }
+            session.changeStatus(GlobalStatus.Committing);
+            boolean allBranchesDone = dispatchBranchCommit(session);
 
-        if (allBranchesDone) {
-            // 所有分支提交成功：释放全局锁，删除会话
-            lockManager.releaseLocks(session);
-            session.changeStatus(GlobalStatus.Committed);
-            sessionManager.removeGlobalSession(session);
-        } else {
-            session.changeStatus(GlobalStatus.CommitRetrying);
-            LOGGER.error("Global transaction [" + session.getXid() + "] branch commit failed, will retry later");
+            if (allBranchesDone) {
+                // 所有分支提交成功：释放全局锁，删除会话
+                lockManager.releaseLocks(session);
+                session.changeStatus(GlobalStatus.Committed);
+                sessionManager.removeGlobalSession(session);
+            } else {
+                session.changeStatus(GlobalStatus.CommitRetrying);
+                LOGGER.error("Global transaction [" + session.getXid() + "] branch commit failed, will retry later");
+            }
         }
     }
 
@@ -221,16 +245,27 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
      * 否则数据不一致且再也没人补偿。会话保留在 RollbackRetrying 状态重试。
      */
     private void completeRollback(GlobalSession session) {
-        session.changeStatus(GlobalStatus.Rollbacking);
-        boolean allBranchesDone = dispatchBranchRollback(session);
+        synchronized (session.getSessionLock()) {
+            // 与 completeCommit 对称：已走上提交链路的会话拒绝回滚（反之亦然），
+            // 防止同一事务的分支一半提交一半回滚
+            GlobalStatus status = session.getStatus();
+            if (status != GlobalStatus.Begin && status != GlobalStatus.Rollbacking
+                    && status != GlobalStatus.RollbackRetrying) {
+                LOGGER.error("Global transaction [" + session.getXid() + "] is in status [" + status
+                        + "], reject rollback");
+                return;
+            }
+            session.changeStatus(GlobalStatus.Rollbacking);
+            boolean allBranchesDone = dispatchBranchRollback(session);
 
-        if (allBranchesDone) {
-            lockManager.releaseLocks(session);
-            session.changeStatus(GlobalStatus.Rollbacked);
-            sessionManager.removeGlobalSession(session);
-        } else {
-            session.changeStatus(GlobalStatus.RollbackRetrying);
-            LOGGER.error("Global transaction [" + session.getXid() + "] branch rollback failed, will retry later");
+            if (allBranchesDone) {
+                lockManager.releaseLocks(session);
+                session.changeStatus(GlobalStatus.Rollbacked);
+                sessionManager.removeGlobalSession(session);
+            } else {
+                session.changeStatus(GlobalStatus.RollbackRetrying);
+                LOGGER.error("Global transaction [" + session.getXid() + "] branch rollback failed, will retry later");
+            }
         }
     }
 
@@ -295,7 +330,7 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
     }
 
     /**
-     * 超时检查，由定时线程周期调用（见 EmbeddedTC）。做两件事：
+     * 超时检查，由定时线程周期调用（EmbeddedTC 与独立 Server 进程都会启动）。做两件事：
      * 1. Begin 状态超过 timeout 还没提交/回滚的全局事务（TM 可能已经宕机），
      *    自动驱动回滚，避免会话和行锁永久占用；
      * 2. 二阶段没做完的会话（CommitRetrying / RollbackRetrying）继续重试。

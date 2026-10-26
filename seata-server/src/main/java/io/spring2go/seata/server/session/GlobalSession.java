@@ -15,8 +15,14 @@ public class GlobalSession {
     private String transactionName;
     private int timeout;
     private long beginTime;
-    private GlobalStatus status = GlobalStatus.Begin;
+    /**
+     * 二阶段状态。timeoutCheck 定时线程和 RPC 工作线程都会读写它，必须 volatile
+     * 保证跨线程可见（原子性由 sessionLock 保证，见下方）。
+     */
+    private volatile GlobalStatus status = GlobalStatus.Begin;
     private final List<BranchSession> branchSessions = new CopyOnWriteArrayList<>();
+    /** 每会话一把锁：串行化同一事务的二阶段驱动（提交/回滚/超时自动回滚互斥） */
+    private final Object sessionLock = new Object();
 
     public GlobalSession() {
         this.beginTime = System.currentTimeMillis();
@@ -98,6 +104,10 @@ public class GlobalSession {
 
     public GlobalStatus getStatus() {
         return status;
+    }
+
+    public Object getSessionLock() {
+        return sessionLock;
     }
 
     public void setStatus(GlobalStatus status) {

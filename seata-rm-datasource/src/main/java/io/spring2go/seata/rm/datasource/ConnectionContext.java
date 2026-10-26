@@ -17,6 +17,10 @@ public class ConnectionContext {
     private List<SQLUndoLog> sqlUndoItemsBuffer = new ArrayList<>();
 
     void appendLockKey(String lockKey) {
+        if (lockKey == null) {
+            // 镜像为空时 buildLockKey 返回 null，不能让字面量 "null" 混进锁键发到 TC
+            return;
+        }
         lockKeysBuffer.add(lockKey);
     }
 

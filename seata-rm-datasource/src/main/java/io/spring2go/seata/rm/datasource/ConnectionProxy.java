@@ -59,6 +59,11 @@ public class ConnectionProxy extends AbstractConnectionProxy {
     }
 
     public void prepareUndoLog(SQLType sqlType, String tableName, TableRecords beforeImage, TableRecords afterImage) throws SQLException {
+        if (beforeImage.size() == 0 && afterImage.size() == 0) {
+            // 0 行 DML（UPDATE/DELETE 没有匹配到任何行）：没有镜像就没有补偿动作，
+            // 也没有可加锁的行。空着写入 undo 项会让二阶段回滚在"空镜像"上误判失败并无限重试
+            return;
+        }
         TableRecords lockKeyRecords = afterImage;
         if (sqlType == SQLType.DELETE) {
             lockKeyRecords = beforeImage;

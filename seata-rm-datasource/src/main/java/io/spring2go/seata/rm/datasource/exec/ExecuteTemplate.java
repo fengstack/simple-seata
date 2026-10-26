@@ -33,6 +33,11 @@ public class ExecuteTemplate {
                     statementProxy.getTargetSQL(),
                     statementProxy.getConnectionProxy().getDbType());
         }
+        if (sqlRecognizer == null) {
+            // 解析器不拦截的语句（普通 SELECT、DDL 等）：不构建镜像、不申请全局锁，
+            // 直接交给目标 Statement 原生执行
+            return statementCallback.execute(statementProxy.getTargetStatement(), args);
+        }
         Executor<T> executor = null;
         switch (sqlRecognizer.getSQLType()) {
             case INSERT:
