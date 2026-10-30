@@ -167,16 +167,14 @@ Seata 自定义了紧凑且高效的二进制私有协议，报文头包含 **14
 
 ```
 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-|      Magic      |      Flag     |     Codec     |               |
+|      Magic      |      Flag     |   TypeCode    |               |
 |      0xdada     |     2 Bytes   |    2 Bytes    |               |
 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+   Message ID  |
 |                                                 |    8 Bytes    |
 |                                                 |               |
 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-|                    Body Length (4 Bytes)                      |
-+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 |                         Body Content                          |
-|                       (Variable Length)                       |
+|           (Variable Length, Encoded by MessageCodec)          |
 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 ```
 
@@ -186,10 +184,9 @@ Seata 自定义了紧凑且高效的二进制私有协议，报文头包含 **14
   - `FLAG_ASYNC = 0x40`：是否为异步消息。
   - `FLAG_HEARTBEAT = 0x20`：心跳探测消息包。
   - `FLAG_FESCAR_CODEC = 0x10`：编解码器标识。
-- **Codec / Type (2 字节)**: 消息类型标识（如 `BRANCH_COMMIT`、`GLOBAL_BEGIN` 等）。
-- **Message ID (8 字节)**: 全局递增的消息序列号，用于异步回调定位 `MessageFuture`。
-- **Body Length (4 字节)**: 消息体数据字节长度。
-- **Body Content**: 具体的消息负载。
+- **TypeCode (2 字节)**: 消息类型标识（如 `TYPE_BRANCH_COMMIT`、`TYPE_GLOBAL_BEGIN`、`TYPE_SEATA_MERGE` 等，心跳帧为 `0`）。
+- **Message ID (8 字节)**: 全局递增的消息序列号，用于异步回调定位 `MessageFuture`（以上共 `2 + 2 + 2 + 8 = 14` 字节定长头）。
+- **Body Content**: 具体的消息负载，由对应 `MessageCodec` 自行编解码变长字段及长度（心跳帧无 Body）。
 
 ---
 

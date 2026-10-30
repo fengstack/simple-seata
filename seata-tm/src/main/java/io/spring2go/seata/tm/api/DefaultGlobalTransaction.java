@@ -4,6 +4,7 @@ import io.spring2go.seata.core.context.RootContext;
 import io.spring2go.seata.core.exception.TransactionException;
 import io.spring2go.seata.core.model.GlobalStatus;
 import io.spring2go.seata.core.model.TransactionManager;
+import io.spring2go.seata.core.rpc.netty.TmRpcClient;
 import io.spring2go.seata.tm.DefaultTransactionManager;
 
 public class DefaultGlobalTransaction implements GlobalTransaction {
@@ -37,7 +38,11 @@ public class DefaultGlobalTransaction implements GlobalTransaction {
         if (xid != null) {
             throw new IllegalStateException("Global transaction already began: " + xid);
         }
-        xid = transactionManager.begin("default", "default_tx_group", name, timeout);
+        TmRpcClient tmRpcClient = TmRpcClient.getInstance();
+        String appId = tmRpcClient.getApplicationId() != null ? tmRpcClient.getApplicationId() : "default";
+        String txGroup = tmRpcClient.getTransactionServiceGroup() != null
+                ? tmRpcClient.getTransactionServiceGroup() : "default_tx_group";
+        xid = transactionManager.begin(appId, txGroup, name, timeout);
         status = GlobalStatus.Begin;
         RootContext.bind(xid);
     }

@@ -10,7 +10,6 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
-import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.spring2go.seata.common.thread.NamedThreadFactory;
 import io.spring2go.seata.core.rpc.RemotingService;
 import org.slf4j.Logger;
@@ -28,7 +27,6 @@ public abstract class AbstractRpcRemotingServer extends AbstractRpcRemoting impl
     private final EventLoopGroup eventLoopGroupWorker;
     private final EventLoopGroup eventLoopGroupBoss;
     private final NettyServerConfig nettyServerConfig;
-    private DefaultEventExecutorGroup defaultEventExecutorGroup;
     private int listenPort;
 
     public void setListenPort(int listenPort) {
@@ -56,10 +54,6 @@ public abstract class AbstractRpcRemotingServer extends AbstractRpcRemoting impl
 
     @Override
     public void start() {
-        this.defaultEventExecutorGroup = new DefaultEventExecutorGroup(
-                nettyServerConfig.getServerWorkerThreads(),
-                new NamedThreadFactory(nettyServerConfig.getExecutorThreadPrefix(),
-                        nettyServerConfig.getServerWorkerThreads()));
         if (listenPort == 0) {
             listenPort = nettyServerConfig.getDefaultListenPort();
         }
@@ -67,7 +61,7 @@ public abstract class AbstractRpcRemotingServer extends AbstractRpcRemoting impl
                 .channel(nettyServerConfig.SERVER_CHANNEL_CLAZZ)
                 .option(ChannelOption.SO_BACKLOG, nettyServerConfig.getSoBackLogSize())
                 .option(ChannelOption.SO_REUSEADDR, true)
-                .option(ChannelOption.SO_KEEPALIVE, true)
+                .childOption(ChannelOption.SO_KEEPALIVE, true)
                 .childOption(ChannelOption.TCP_NODELAY, true)
                 .childOption(ChannelOption.SO_SNDBUF, nettyServerConfig.getServerSocketSendBufSize())
                 .childOption(ChannelOption.SO_RCVBUF, nettyServerConfig.getServerSocketResvBufSize())
@@ -103,9 +97,6 @@ public abstract class AbstractRpcRemotingServer extends AbstractRpcRemoting impl
         try {
             this.eventLoopGroupBoss.shutdownGracefully();
             this.eventLoopGroupWorker.shutdownGracefully();
-            if (this.defaultEventExecutorGroup != null) {
-                this.defaultEventExecutorGroup.shutdownGracefully();
-            }
         } catch (Exception exx) {
             LOGGER.error(exx.getMessage());
         }

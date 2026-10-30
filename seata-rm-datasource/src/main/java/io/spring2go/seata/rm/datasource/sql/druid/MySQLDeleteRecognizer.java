@@ -70,7 +70,7 @@ public class MySQLDeleteRecognizer extends BaseRecognizer implements SQLDeleteRe
                 return super.visit(x);
             }
         };
-        visitor.visit((SQLBinaryOpExpr) where);
+        where.accept(visitor);
         return sb.toString();
     }
 
@@ -82,7 +82,7 @@ public class MySQLDeleteRecognizer extends BaseRecognizer implements SQLDeleteRe
         }
         StringBuffer sb = new StringBuffer();
         MySqlOutputVisitor visitor = new MySqlOutputVisitor(sb);
-        visitor.visit((SQLBinaryOpExpr) where);
+        where.accept(visitor);
         return sb.toString();
     }
 }

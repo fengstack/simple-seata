@@ -1,6 +1,5 @@
 package io.spring2go.seata.common.util;
 
-import javax.sql.rowset.serial.SerialBlob;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -19,20 +18,12 @@ public class StringUtils {
         return (str == null) || (str.isEmpty());
     }
 
-
     public static Blob string2blob(String str) throws SQLException {
-        if (str == null) {
-            return null;
-        }
-        return new SerialBlob(str.getBytes());
+        return BlobUtils.string2blob(str);
     }
 
     public static String blob2string(Blob blob) throws SQLException {
-        if (blob == null) {
-            return null;
-        }
-
-        return new String(blob.getBytes((long) 1, (int) blob.length()));
+        return BlobUtils.blob2string(blob);
     }
 
     public static String inputStream2String(InputStream is) throws IOException {

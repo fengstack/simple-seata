@@ -182,4 +182,36 @@ public class ProtocolCodecRoundTripTest {
         Assert.assertEquals(first.getBranchId(), decodedFirst.getBranchId());
         Assert.assertEquals(second.getBranchId(), decodedSecond.getBranchId());
     }
+
+    /**
+     * 场景 6：同一消息实例被重复 encode（如重试、连接池刷新复用）。
+     * 每次 encode 出的字节流必须完全一致，不能因为内部 ByteBuffer 状态残留而报错或截断。
+     */
+    @Test
+    public void testRepeatedEncodeIdempotent() {
+        BranchCommitRequest commitReq = buildBranchCommitRequest();
+        byte[] commitBytes1 = commitReq.encode();
+        byte[] commitBytes2 = commitReq.encode();
+        Assert.assertArrayEquals("BranchCommitRequest repeated encode must be identical", commitBytes1, commitBytes2);
+
+        BranchRegisterRequest regReq = new BranchRegisterRequest();
+        regReq.setTransactionId(1001L);
+        regReq.setBranchType(BranchType.AT);
+        regReq.setResourceId("jdbc:mysql://127.0.0.1:3306/db");
+        regReq.setLockKey("t_order:1,2");
+        byte[] regBytes1 = regReq.encode();
+        byte[] regBytes2 = regReq.encode();
+        Assert.assertArrayEquals("BranchRegisterRequest repeated encode must be identical", regBytes1, regBytes2);
+
+         io.spring2go.seata.core.protocol.transaction.BranchReportRequest reportReq =
+                 new io.spring2go.seata.core.protocol.transaction.BranchReportRequest();
+        reportReq.setTransactionId(1001L);
+        reportReq.setBranchId(2001L);
+        reportReq.setStatus(io.spring2go.seata.core.model.BranchStatus.PhaseOne_Done);
+        reportReq.setResourceId("jdbc:mysql://127.0.0.1:3306/db");
+        reportReq.setApplicationData("app-data");
+        byte[] reportBytes1 = reportReq.encode();
+        byte[] reportBytes2 = reportReq.encode();
+        Assert.assertArrayEquals("BranchReportRequest repeated encode must be identical", reportBytes1, reportBytes2);
+    }
 }

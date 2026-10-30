@@ -55,7 +55,9 @@ public abstract class AbstractPreparedStatementProxy extends StatementProxy<Prep
     }
 
     protected void setParamByIndex(int index, Object x) {
-        parameters[--index].add(x);
+        ArrayList<Object> paramList = parameters[--index];
+        paramList.clear();
+        paramList.add(x);
     }
 
     @Override

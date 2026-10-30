@@ -67,6 +67,7 @@ public abstract class AbstractResultMessage extends AbstractMessage implements M
 
     @Override
     public final byte[] encode() {
+        byteBuffer.clear();
         doEncode();
         return flushEncode();
     }

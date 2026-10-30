@@ -14,7 +14,6 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
-import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
 import io.spring2go.seata.common.exception.FrameworkErrorCode;
 import io.spring2go.seata.common.exception.FrameworkException;
@@ -80,7 +79,6 @@ public abstract class AbstractRpcRemotingClient extends AbstractRpcRemoting
 
     private final Bootstrap bootstrap = new Bootstrap();
     private final EventLoopGroup eventLoopGroupWorker;
-    private EventExecutorGroup defaultEventExecutorGroup;
     private final AtomicBoolean initialized = new AtomicBoolean(false);
 
     public AbstractRpcRemotingClient(final NettyClientConfig nettyClientConfig,
@@ -96,7 +94,6 @@ public abstract class AbstractRpcRemotingClient extends AbstractRpcRemoting
         this.eventLoopGroupWorker = new NioEventLoopGroup(selectorThreadSize,
                 new NamedThreadFactory(getThreadPrefix(clientConfig.getClientSelectorThreadPrefix()),
                         selectorThreadSize));
-        this.defaultEventExecutorGroup = eventExecutorGroup;
     }
 
     @Override
@@ -137,11 +134,6 @@ public abstract class AbstractRpcRemotingClient extends AbstractRpcRemoting
 
     @Override
     public void start() {
-        if (this.defaultEventExecutorGroup == null) {
-            this.defaultEventExecutorGroup = new DefaultEventExecutorGroup(nettyClientConfig.getClientWorkerThreads(),
-                    new NamedThreadFactory(getThreadPrefix(nettyClientConfig.getClientWorkerThreadPrefix()),
-                            nettyClientConfig.getClientWorkerThreads()));
-        }
         this.bootstrap.group(this.eventLoopGroupWorker).channel(nettyClientConfig.getClientChannelClazz())
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.SO_KEEPALIVE, true)
@@ -192,9 +184,6 @@ public abstract class AbstractRpcRemotingClient extends AbstractRpcRemoting
     public void shutdown() {
         try {
             this.eventLoopGroupWorker.shutdownGracefully();
-            if (this.defaultEventExecutorGroup != null) {
-                this.defaultEventExecutorGroup.shutdownGracefully();
-            }
             super.destroy();
         } catch (Exception exx) {
             LOGGER.error("shutdown error:" + exx.getMessage());
@@ -363,9 +352,9 @@ public abstract class AbstractRpcRemotingClient extends AbstractRpcRemoting
             if (channel.equals(channels.get(serverAddress))) {
                 channels.remove(serverAddress);
             }
-            nettyClientKeyPool.returnObject(poolKeyMap.get(serverAddress), channel);
+            nettyClientKeyPool.invalidateObject(poolKeyMap.get(serverAddress), channel);
         } catch (Exception exx) {
-            LOGGER.error("return channel to pool error:" + exx.getMessage());
+            LOGGER.error("invalidate channel from pool error:" + exx.getMessage());
         }
     }
 

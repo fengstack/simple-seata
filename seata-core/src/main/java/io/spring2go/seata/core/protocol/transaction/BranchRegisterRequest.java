@@ -60,12 +60,14 @@ public class BranchRegisterRequest extends AbstractTransactionRequestToTC implem
     @Override
     public byte[] encode() {
         byte[] lockKeyBytes = null;
+        int bufferSize = 1024;
         if (this.lockKey != null) {
             lockKeyBytes = lockKey.getBytes(UTF8);
             if (lockKeyBytes.length > 512) {
-                byteBuffer = ByteBuffer.allocate(lockKeyBytes.length + 1024);
+                bufferSize = lockKeyBytes.length + 1024;
             }
         }
+        ByteBuffer byteBuffer = ByteBuffer.allocate(bufferSize);
 
         // 1. Transaction Id
         byteBuffer.putLong(this.transactionId);

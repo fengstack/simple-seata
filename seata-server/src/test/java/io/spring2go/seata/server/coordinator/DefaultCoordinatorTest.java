@@ -238,6 +238,89 @@ public class DefaultCoordinatorTest {
     }
 
     /**
+     * 场景：多分支全局事务在二阶段重试时，不应向已经二阶段成功（PhaseTwo_Rollbacked / PhaseTwo_Committed）
+     * 的分支重复派发 RPC 指令。
+     */
+    @Test
+    public void testRetrySkipsAlreadyCompletedBranches() {
+        final List<String> dispatchedResources = new CopyOnWriteArrayList<>();
+        final AtomicBoolean storageShouldFail = new AtomicBoolean(true);
+
+        ServerMessageSender selectiveSender = new ServerMessageSender() {
+            @Override
+            public void sendRequest(String resourceId, String clientIP, String applicationId, Object request) {
+            }
+
+            @Override
+            public void sendResponse(long msgId, String dbKey, String clientIp, String clientAppName, Object msg) {
+            }
+
+            @Override
+            public void sendResponse(long msgId, Channel channel, Object msg) {
+            }
+
+            @Override
+            public Object sendSynRequest(String dbKey, String clientIp, String clientAppName, Object msg, long timeout) {
+                dispatchedResources.add(dbKey);
+                if ("db_storage".equals(dbKey) && storageShouldFail.get()) {
+                    BranchRollbackResponse resp = new BranchRollbackResponse();
+                    resp.setBranchStatus(BranchStatus.PhaseTwo_RollbackFailed_Retriable);
+                    return resp;
+                }
+                BranchRollbackResponse resp = new BranchRollbackResponse();
+                resp.setBranchStatus(BranchStatus.PhaseTwo_Rollbacked);
+                return resp;
+            }
+
+            @Override
+            public Object sendSynRequest(String dbKey, String clientIp, String clientAppName, Object msg) {
+                return sendSynRequest(dbKey, clientIp, clientAppName, msg, 0);
+            }
+        };
+
+        DefaultCoordinator coord = new DefaultCoordinator(sessionManager, lockManager, selectiveSender);
+        RpcContext rpcContext = new RpcContext();
+        rpcContext.setApplicationId("app-order");
+
+        GlobalBeginRequest beginRequest = new GlobalBeginRequest();
+        beginRequest.setTransactionName("multiBranchTx");
+        beginRequest.setTimeout(60000);
+        long txId = XID.getTransactionId(coord.handle(beginRequest, rpcContext).getXid());
+
+        // 注册分支 1：db_storage（将在第一次回滚时失败）
+        BranchRegisterRequest b1 = new BranchRegisterRequest();
+        b1.setTransactionId(txId);
+        b1.setBranchType(BranchType.AT);
+        b1.setResourceId("db_storage");
+        b1.setLockKey("t_storage:1");
+        coord.handle(b1, rpcContext);
+
+        // 注册分支 2：db_account（将在第一次回滚时成功）
+        BranchRegisterRequest b2 = new BranchRegisterRequest();
+        b2.setTransactionId(txId);
+        b2.setBranchType(BranchType.AT);
+        b2.setResourceId("db_account");
+        b2.setLockKey("t_account:1");
+        coord.handle(b2, rpcContext);
+
+        // 第一次回滚（逆序：先派发 db_account 成功，再派发 db_storage 失败）
+        GlobalRollbackRequest rollbackRequest = new GlobalRollbackRequest();
+        rollbackRequest.setTransactionId(txId);
+        GlobalRollbackResponse resp = coord.handle(rollbackRequest, rpcContext);
+        Assert.assertEquals(GlobalStatus.RollbackRetrying, resp.getGlobalStatus());
+        Assert.assertEquals(2, dispatchedResources.size());
+
+        // 第二次重试（db_storage 恢复）：只应向未完成的 db_storage 派发，不应重复派发已成功的 db_account
+        dispatchedResources.clear();
+        storageShouldFail.set(false);
+        coord.timeoutCheck();
+
+        Assert.assertNull(sessionManager.findGlobalSession(txId));
+        Assert.assertEquals("重试时不应重复派发已完成的 db_account 分支", 1, dispatchedResources.size());
+        Assert.assertEquals("db_storage", dispatchedResources.get(0));
+    }
+
+    /**
      * 可控的假 sender：recovered=false 时模拟 RM 掉线（抛异常），
      * 恢复后返回"提交成功"。用于验证 TC 的提交失败重试逻辑。
      */

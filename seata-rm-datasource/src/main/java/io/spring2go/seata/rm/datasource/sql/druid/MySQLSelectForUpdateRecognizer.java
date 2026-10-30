@@ -48,7 +48,7 @@ public class MySQLSelectForUpdateRecognizer extends BaseRecognizer implements SQ
                 return super.visit(x);
             }
         };
-        visitor.visit((SQLBinaryOpExpr) where);
+        where.accept(visitor);
         return sb.toString();
     }
 
@@ -61,7 +61,7 @@ public class MySQLSelectForUpdateRecognizer extends BaseRecognizer implements SQ
         }
         StringBuffer sb = new StringBuffer();
         MySqlOutputVisitor visitor = new MySqlOutputVisitor(sb);
-        visitor.visit((SQLBinaryOpExpr) where);
+        where.accept(visitor);
         return sb.toString();
     }
 

@@ -204,4 +204,44 @@ public class EndToEndIntegrationTest {
         Assert.assertEquals("undo_log should be deleted after successful retry",
                 0, DataSourceProvider.getUndoLogCount(storageDb));
     }
+
+    /**
+     * 核心防御场景：空回滚与防悬挂（Anti-Suspension）。
+     *
+     * 当分支事务已经注册，但本地一阶段事务尚未提交（或已回滚）时，TC 下发了 BranchRollback：
+     * 1. RM 查不到 status=0 的 undo_log（空回滚），此时不能什么都不做就返回，
+     *    必须插入一条 log_status=1 (GlobalFinished) 的防悬挂标记记录；
+     * 2. 如果迟到的一阶段本地事务随后尝试 flushUndoLogs 并 commit，
+     *    就会被 undo_log 表上的 (xid, branch_id) 唯一约束拦截而失败回滚，绝不允许悬挂数据落库。
+     */
+    @Test
+    public void testAntiSuspensionPreventsLatePhaseOneCommit() throws Exception {
+        String fakeXid = "127.0.0.1:8091:999999";
+        long fakeBranchId = 888888L;
+
+        // 1. 模拟二阶段回滚先于一阶段本地提交到达（此时库里还没有该分支的 undo_log）
+        io.spring2go.seata.rm.datasource.undo.UndoLogManager.undo(storageDb, fakeXid, fakeBranchId);
+
+        // 验证库里插入了一条防悬挂屏障记录（log_status = 1）
+        Assert.assertEquals("Empty rollback must insert a defense undo_log record to prevent suspension",
+                1, DataSourceProvider.getUndoLogCount(storageDb));
+
+        // 2. 模拟迟到的一阶段试图往同一个 (xid, branch_id) 刷入正常 undo_log：必须因唯一约束冲突抛出 SQLException
+        io.spring2go.seata.rm.datasource.ConnectionProxy connProxy = storageDb.getConnection();
+        connProxy.setAutoCommit(false);
+        connProxy.bind(fakeXid);
+        java.lang.reflect.Method setBranchId = io.spring2go.seata.rm.datasource.ConnectionContext.class
+                .getDeclaredMethod("setBranchId", Long.class);
+        setBranchId.setAccessible(true);
+        setBranchId.invoke(connProxy.getContext(), fakeBranchId);
+        try {
+            io.spring2go.seata.rm.datasource.undo.UndoLogManager.flushUndoLogs(connProxy);
+            Assert.fail("Late phase-1 flushUndoLogs must be rejected by unique index on (xid, branch_id)");
+        } catch (java.sql.SQLException expected) {
+            // 唯一索引冲突拦截成功！回滚迟到的本地事务
+            connProxy.getTargetConnection().rollback();
+        } finally {
+            connProxy.close();
+        }
+    }
 }

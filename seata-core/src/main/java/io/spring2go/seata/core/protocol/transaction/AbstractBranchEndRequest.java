@@ -64,12 +64,14 @@ public abstract class AbstractBranchEndRequest extends AbstractTransactionReques
     @Override
     public byte[] encode() {
         byte[] applicationDataBytes = null;
+        int bufferSize = 1024;
         if (this.applicationData != null) {
             applicationDataBytes = applicationData.getBytes(UTF8);
             if (applicationDataBytes.length > 512) {
-                byteBuffer = ByteBuffer.allocate(applicationDataBytes.length + 1024);
+                bufferSize = applicationDataBytes.length + 1024;
             }
         }
+        ByteBuffer byteBuffer = ByteBuffer.allocate(bufferSize);
 
         // 1. xid
         if (this.xid != null) {

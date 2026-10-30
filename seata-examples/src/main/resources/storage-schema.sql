@@ -17,5 +17,5 @@ CREATE TABLE IF NOT EXISTS undo_log (
     log_modified DATETIME NOT NULL,
     ext VARCHAR(100) DEFAULT NULL,
     PRIMARY KEY (id),
-    KEY idx_unionkey (xid, branch_id)
+    UNIQUE KEY ux_undo_log (xid, branch_id)
 );

@@ -276,6 +276,9 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
         }
         boolean allDone = true;
         for (BranchSession branch : session.getBranchSessions()) {
+            if (branch.getStatus() == BranchStatus.PhaseTwo_Committed) {
+                continue;
+            }
             try {
                 BranchCommitRequest branchCommitRequest = new BranchCommitRequest();
                 branchCommitRequest.setXid(session.getXid());
@@ -287,8 +290,10 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
                         branch.getClientIp(), branch.getClientId(), branchCommitRequest, 3000);
 
                 // RM 返回的分支状态也必须检查：请求送达了，但 RM 可能执行失败
-                if (!(result instanceof AbstractBranchEndResponse)
-                        || ((AbstractBranchEndResponse) result).getBranchStatus() != BranchStatus.PhaseTwo_Committed) {
+                if (result instanceof AbstractBranchEndResponse
+                        && ((AbstractBranchEndResponse) result).getBranchStatus() == BranchStatus.PhaseTwo_Committed) {
+                    branch.setStatus(BranchStatus.PhaseTwo_Committed);
+                } else {
                     allDone = false;
                 }
             } catch (Exception e) {
@@ -307,6 +312,9 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
         List<BranchSession> branches = session.getBranchSessions();
         for (int i = branches.size() - 1; i >= 0; i--) {
             BranchSession branch = branches.get(i);
+            if (branch.getStatus() == BranchStatus.PhaseTwo_Rollbacked) {
+                continue;
+            }
             try {
                 BranchRollbackRequest branchRollbackRequest = new BranchRollbackRequest();
                 branchRollbackRequest.setXid(session.getXid());
@@ -317,8 +325,10 @@ public class DefaultCoordinator implements TCInboundHandler, TransactionMessageH
                 Object result = serverMessageSender.sendSynRequest(branch.getResourceId(),
                         branch.getClientIp(), branch.getClientId(), branchRollbackRequest, 3000);
 
-                if (!(result instanceof AbstractBranchEndResponse)
-                        || ((AbstractBranchEndResponse) result).getBranchStatus() != BranchStatus.PhaseTwo_Rollbacked) {
+                if (result instanceof AbstractBranchEndResponse
+                        && ((AbstractBranchEndResponse) result).getBranchStatus() == BranchStatus.PhaseTwo_Rollbacked) {
+                    branch.setStatus(BranchStatus.PhaseTwo_Rollbacked);
+                } else {
                     allDone = false;
                 }
             } catch (Exception e) {

@@ -15,11 +15,15 @@ public class TransactionalTemplateTest {
         boolean beginCalled = false;
         boolean commitCalled = false;
         boolean rollbackCalled = false;
+        String lastAppId;
+        String lastTxServiceGroup;
         String xid = "127.0.0.1:8091:2001";
 
         @Override
         public String begin(String applicationId, String transactionServiceGroup, String name, int timeout) throws TransactionException {
             beginCalled = true;
+            lastAppId = applicationId;
+            lastTxServiceGroup = transactionServiceGroup;
             return xid;
         }
 
@@ -84,5 +88,19 @@ public class TransactionalTemplateTest {
         Assert.assertFalse(tm.commitCalled);
         Assert.assertTrue(tm.rollbackCalled);
         Assert.assertFalse(RootContext.inGlobalTransaction());
+    }
+
+    @Test
+    public void testBeginPassesConfiguredAppIdAndTxGroup() throws Throwable {
+        io.spring2go.seata.core.rpc.netty.TmRpcClient.getInstance("order-service", "order_tx_group");
+        DummyTransactionManager tm = new DummyTransactionManager();
+        DefaultGlobalTransaction tx = new DefaultGlobalTransaction(tm);
+        tx.begin(30000, "createOrder");
+        try {
+            Assert.assertEquals("order-service", tm.lastAppId);
+            Assert.assertEquals("order_tx_group", tm.lastTxServiceGroup);
+        } finally {
+            tx.commit();
+        }
     }
 }
